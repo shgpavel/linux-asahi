@@ -574,6 +574,9 @@ Kernel parameters
 	arm64.nomte	[ARM64] Unconditionally disable Memory Tagging Extension
 			support
 
+	arm64.nowfxt	[ARM64] Unconditionally disable WFE and WFI with Timeout
+			instructions support
+
 	arm64.nopauth	[ARM64] Unconditionally disable Pointer Authentication
 			support
 
