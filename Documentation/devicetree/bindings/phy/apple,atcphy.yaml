@@ -28,6 +28,13 @@ description: >
 
 allOf:
   - $ref: /schemas/usb/usb-switch.yaml#
+  - if:
+      not:
+        required:
+          - apple,fixed-mode
+    then:
+      required:
+        - ports
 
 $defs:
   apple,tunable:
@@ -55,6 +62,10 @@ properties:
               - apple,t8112-atcphy
           - const: apple,t8103-atcphy
       - const: apple,t8103-atcphy
+      - items:
+          - const: apple,t8132-atcphy
+          - const: apple,t8122-atcphy
+      - const: apple,t8122-atcphy
 
   reg:
     items:
@@ -83,6 +94,16 @@ properties:
 
   power-domains:
     maxItems: 1
+
+  apple,fixed-mode:
+    $ref: /schemas/types.yaml#/definitions/string
+    enum:
+      - usb2
+      - usb3
+    description: >
+      The PHY is wired to an onboard USB device instead of a Type-C
+      connector, in normal orientation and without a Type-C controller.
+      It is brought up in this mode when the attached DWC3 leaves reset.
 
   ports:
     $ref: /schemas/graph.yaml#/properties/ports
@@ -160,7 +181,6 @@ required:
   - orientation-switch
   - mode-switch
   - power-domains
-  - ports
 
 additionalProperties: false
 
