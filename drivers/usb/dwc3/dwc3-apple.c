@@ -13,6 +13,7 @@
 #include <linux/mutex.h>
 #include <linux/platform_device.h>
 #include <linux/reset.h>
+#include <linux/usb/otg.h>
 
 #include "glue.h"
 
@@ -475,6 +476,17 @@ static int dwc3_apple_probe(struct platform_device *pdev)
 	 * details.
 	 */
 	appledwc->state = DWC3_APPLE_PROBE_PENDING;
+
+	if (usb_get_dr_mode(dev) == USB_DR_MODE_HOST) {
+		guard(mutex)(&appledwc->lock);
+		ret = dwc3_apple_init(appledwc, DWC3_APPLE_HOST);
+		if (ret && appledwc->state == DWC3_APPLE_PROBE_PENDING)
+			return dev_err_probe(dev, ret, "Failed to initialize host\n");
+		if (ret)
+			dev_err(dev, "Failed to initialize host, err=%d\n", ret);
+		return 0;
+	}
+
 	ret = dwc3_apple_setup_role_switch(appledwc);
 	if (ret)
 		return dev_err_probe(&pdev->dev, ret, "Failed to setup role switch\n");
