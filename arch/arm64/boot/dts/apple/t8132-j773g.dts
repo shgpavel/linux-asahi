@@ -17,8 +17,53 @@
 	model = "Apple Mac mini (M4, 2024)";
 
 	aliases {
+		atcphy2 = &atcphy2;
 		ethernet0 = &ethernet0;
 	};
+};
+
+/*
+ * The front USB-C ports hang off an onboard USB 3 hub on the third
+ * controller, with no Type-C controller in between.
+ */
+&pinctrl_ap {
+	/*
+	 * iBoot leaves the hub in reset. It loads its firmware from a flash
+	 * shared with spi3 when it leaves reset with the flash enabled.
+	 */
+	usb_hub_oe-hog {
+		gpio-hog;
+		gpios = <101 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "usb-hub-flash-oe";
+	};
+
+	usb_hub_rst-hog {
+		gpio-hog;
+		gpios = <198 GPIO_ACTIVE_LOW>;
+		output-low;
+		line-name = "usb-hub-rst";
+	};
+};
+
+&atcphy2 {
+	apple,fixed-mode = "usb3";
+	status = "okay";
+};
+
+&dwc3_2_dart_0 {
+	status = "okay";
+};
+
+&dwc3_2_dart_1 {
+	status = "okay";
+};
+
+&dwc3_2 {
+	dr_mode = "host";
+	/delete-property/ usb-role-switch;
+	/delete-property/ role-switch-default-mode;
+	status = "okay";
 };
 
 &port02 {
