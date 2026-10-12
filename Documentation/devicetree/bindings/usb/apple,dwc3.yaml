@@ -15,6 +15,16 @@ description:
 
 allOf:
   - $ref: snps,dwc3-common.yaml#
+  - if:
+      not:
+        required:
+          - dr_mode
+        properties:
+          dr_mode:
+            const: host
+    then:
+      required:
+        - usb-role-switch
 
 properties:
   compatible:
@@ -24,6 +34,8 @@ properties:
               - apple,t6000-dwc3
               - apple,t6020-dwc3
               - apple,t8112-dwc3
+              - apple,t8122-dwc3
+              - apple,t8132-dwc3
           - const: apple,t8103-dwc3
       - const: apple,t8103-dwc3
 
@@ -57,7 +69,6 @@ required:
   - iommus
   - resets
   - power-domains
-  - usb-role-switch
 
 unevaluatedProperties: false
 
