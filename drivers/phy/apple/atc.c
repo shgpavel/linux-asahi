@@ -651,6 +651,7 @@ struct apple_atcphy {
 
 	const struct atcphy_hw *hw;
 	enum atcphy_mode mode;
+	enum atcphy_mode fixed_mode;
 	int dp_link_rate;
 	bool swap_lanes;
 	bool pipehandler_up;
@@ -2216,14 +2217,29 @@ static int atcphy_dwc3_reset_assert(struct reset_controller_dev *rcdev, unsigned
 
 	atcphy_usb2_power_off(atcphy);
 
+	if (atcphy->fixed_mode != APPLE_ATCPHY_MODE_OFF &&
+	    atcphy->mode != APPLE_ATCPHY_MODE_OFF)
+		atcphy_configure(atcphy, APPLE_ATCPHY_MODE_OFF);
+
 	return 0;
 }
 
 static int atcphy_dwc3_reset_deassert(struct reset_controller_dev *rcdev, unsigned long id)
 {
 	struct apple_atcphy *atcphy = container_of(rcdev, struct apple_atcphy, rcdev);
+	int ret;
 
 	guard(mutex)(&atcphy->lock);
+
+	if (atcphy->fixed_mode != APPLE_ATCPHY_MODE_OFF &&
+	    atcphy->mode != atcphy->fixed_mode) {
+		ret = atcphy_configure(atcphy, atcphy->fixed_mode);
+		if (ret) {
+			atcphy_configure(atcphy, APPLE_ATCPHY_MODE_OFF);
+			return ret;
+		}
+		set32(atcphy->regs.usb2phy + USB2PHY_SIG, USB2PHY_SIG_HOST);
+	}
 
 	clear32(atcphy->regs.pipehandler + PIPEHANDLER_AON_GEN,
 		PIPEHANDLER_AON_GEN_DWC3_FORCE_CLAMP_EN);
@@ -2485,6 +2501,29 @@ static int atcphy_probe_finalize(struct apple_atcphy *atcphy)
 	return 0;
 }
 
+static int atcphy_probe_fixed_mode(struct apple_atcphy *atcphy)
+{
+	const char *mode;
+	int ret;
+
+	atcphy->fixed_mode = APPLE_ATCPHY_MODE_OFF;
+	ret = of_property_read_string(atcphy->np, "apple,fixed-mode", &mode);
+	if (ret == -EINVAL)
+		return 0;
+	if (ret)
+		return dev_err_probe(atcphy->dev, ret, "Invalid apple,fixed-mode\n");
+
+	if (!strcmp(mode, "usb2"))
+		atcphy->fixed_mode = APPLE_ATCPHY_MODE_USB2;
+	else if (!strcmp(mode, "usb3"))
+		atcphy->fixed_mode = APPLE_ATCPHY_MODE_USB3;
+	else
+		return dev_err_probe(atcphy->dev, -EINVAL,
+				     "Unsupported apple,fixed-mode \"%s\"\n", mode);
+
+	return 0;
+}
+
 static int atcphy_probe(struct platform_device *pdev)
 {
 	struct apple_atcphy *atcphy;
@@ -2508,6 +2547,9 @@ static int atcphy_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 	ret = atcphy_load_tunables(atcphy);
+	if (ret)
+		return ret;
+	ret = atcphy_probe_fixed_mode(atcphy);
 	if (ret)
 		return ret;
 
