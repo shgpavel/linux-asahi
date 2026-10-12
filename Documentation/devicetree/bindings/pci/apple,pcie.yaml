@@ -42,7 +42,9 @@ properties:
               - apple,t6000-pcie
           - const: apple,pcie
       - items:
-          - const: apple,t8122-pcie
+          - enum:
+              - apple,t8122-pcie
+              - apple,t8132-pcie
           - const: apple,t6020-pcie
       - const: apple,t6020-pcie
 
@@ -51,18 +53,28 @@ properties:
     maxItems: 10
 
   reg-names:
-    minItems: 3
-    items:
-      - const: config
-      - const: rc
-      - const: port0
-      - const: port1
-      - const: port2
-      - const: port3
-      - const: phy0
-      - const: phy1
-      - const: phy2
-      - const: phy3
+    oneOf:
+      - minItems: 3
+        items:
+          - const: config
+          - const: rc
+          - const: port0
+          - const: port1
+          - const: port2
+          - const: port3
+          - const: phy0
+          - const: phy1
+          - const: phy2
+          - const: phy3
+      - items:
+          - const: config
+          - const: rc
+          - const: port0
+          - const: port1
+          - const: port2
+          - const: phy0
+          - const: phy1
+          - const: phy2
 
   ranges:
     minItems: 2
@@ -136,11 +148,25 @@ allOf:
       properties:
         compatible:
           contains:
-            const: apple,t6020-pcie
+            const: apple,t8132-pcie
     then:
       properties:
+        reg:
+          maxItems: 8
         reg-names:
-          minItems: 10
+          maxItems: 8
+        interrupts:
+          maxItems: 3
+    else:
+      if:
+        properties:
+          compatible:
+            contains:
+              const: apple,t6020-pcie
+      then:
+        properties:
+          reg-names:
+            minItems: 10
 
 examples:
   - |
