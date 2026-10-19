@@ -439,6 +439,9 @@ int dcp_crtc_atomic_modeset(struct drm_crtc *crtc,
 	case DCP_FIRMWARE_V_14_7:
 		ret = iomfb_modeset_v14_7_0(dcp, crtc_state);
 		break;
+	case DCP_FIRMWARE_V_27_0:
+		ret = iboot_modeset(dcp, crtc_state);
+		break;
 	default:
 		WARN_ONCE(true, "Unexpected firmware version: %u\n",
 			  dcp->fw_compat);
@@ -490,6 +493,9 @@ void dcp_flush(struct drm_crtc *crtc, struct drm_atomic_commit *commit)
 		break;
 	case DCP_FIRMWARE_V_14_7:
 		iomfb_flush_v14_7_0(dcp, crtc, commit);
+		break;
+	case DCP_FIRMWARE_V_27_0:
+		iboot_flush(dcp, crtc, commit);
 		break;
 	default:
 		WARN_ONCE(true, "Unexpected firmware version: %u\n", dcp->fw_compat);
@@ -562,6 +568,8 @@ void iomfb_shutdown(struct apple_dcp *dcp)
 		break;
 	case DCP_FIRMWARE_V_14_7:
 		iomfb_shutdown_v14_7_0(dcp);
+		break;
+	case DCP_FIRMWARE_V_27_0:
 		break;
 	default:
 		WARN_ONCE(true, "Unexpected firmware version: %u\n", dcp->fw_compat);

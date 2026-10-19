@@ -20,6 +20,7 @@
 #include "iomfb_v13_3.h"
 #include "iomfb_v14_7.h"
 #include "epic/dpavservep.h"
+#include "ibootep.h"
 #include "version_utils.h"
 
 #define DCP_MAX_PLANES 4
@@ -236,6 +237,14 @@ struct apple_dcp {
 	struct completion systemep_done;
 
 	struct apple_dcp_afkep *ibootep;
+	struct apple_epic_service *iboot_service;
+	struct completion iboot_ready;
+	struct mutex iboot_mutex;
+	struct delayed_work iboot_hpd_work;
+	struct iboot_timing_mode *iboot_tmodes;
+	unsigned int iboot_nr_tmodes;
+	struct iboot_color_mode iboot_cmode;
+	unsigned int iboot_hpd_tries;
 	struct apple_dcp_afkep *dcpavservep;
 	struct dcpavserv dcpavserv;
 

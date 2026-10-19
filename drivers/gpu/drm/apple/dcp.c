@@ -472,8 +472,11 @@ static irqreturn_t dcp_dp2hdmi_hpd(int irq, void *data)
 		dev_info(dcp->dev, "DP2HDMI HPD irq, 500ms debounce: connected:%d\n", connected);
 	}
 
-	if (connected)
+	if (connected) {
 		dcp_dptx_connect(dcp, 0);
+		if (dcp->fw_compat == DCP_FIRMWARE_V_27_0)
+			iboot_hpd_changed(dcp);
+	}
 
 	return IRQ_HANDLED;
 }
@@ -558,6 +561,13 @@ int dcp_start(struct platform_device *pdev)
 	} else if (dcp->phy) {
 		dev_warn(dcp->dev, "OS firmware incompatible with dptxport EP\n");
 	}
+	if (dcp->fw_compat == DCP_FIRMWARE_V_27_0) {
+		ret = iboot_start(dcp);
+		if (ret)
+			dev_err(dcp->dev, "Failed to start iBoot interface: %d\n", ret);
+		return ret;
+	}
+
 	ret = iomfb_start_rtkit(dcp);
 	if (ret)
 		dev_err(dcp->dev, "Failed to start IOMFB endpoint: %d\n", ret);
@@ -586,6 +596,9 @@ static void _dcp_poweroff(struct apple_dcp *dcp)
 	case DCP_FIRMWARE_V_14_7:
 		iomfb_poweroff_v14_7_0(dcp);
 		break;
+	case DCP_FIRMWARE_V_27_0:
+		iboot_poweroff(dcp);
+		break;
 	default:
 		WARN_ONCE(true, "Unexpected firmware version: %u\n", dcp->fw_compat);
 		break;
@@ -599,10 +612,13 @@ static int dcp_enable_dp2hdmi_hpd(struct apple_dcp *dcp)
 		bool connected = gpiod_get_value_cansleep(dcp->hdmi_hpd);
 		dev_info(dcp->dev, "%s: DP2HDMI HPD connected:%d\n", __func__, connected);
 
-		if (connected)
+		if (connected) {
 			dcp_dptx_connect(dcp, 0);
-		else
+			if (dcp->fw_compat == DCP_FIRMWARE_V_27_0)
+				iboot_hpd_changed(dcp);
+		} else {
 			_dcp_poweroff(dcp);
+		}
 	}
 
 	if (dcp->hdmi_hpd_irq)
@@ -648,6 +664,8 @@ static void __maybe_unused dcp_sleep(struct apple_dcp *dcp)
 	case DCP_FIRMWARE_V_14_7:
 		iomfb_sleep_v14_7_0(dcp);
 		break;
+	case DCP_FIRMWARE_V_27_0:
+		break;
 	default:
 		WARN_ONCE(true, "Unexpected firmware version: %u\n", dcp->fw_compat);
 		break;
@@ -675,6 +693,9 @@ void dcp_poweron(struct platform_device *pdev)
 		break;
 	case DCP_FIRMWARE_V_14_7:
 		iomfb_poweron_v14_7_0(dcp);
+		break;
+	case DCP_FIRMWARE_V_27_0:
+		iboot_poweron(dcp);
 		break;
 	default:
 		WARN_ONCE(true, "Unexpected firmware version: %u\n", dcp->fw_compat);
@@ -1231,6 +1252,11 @@ static int dcp_platform_probe(struct platform_device *pdev)
 		if (surf_en)
 			set_bit(surf, dcp->iomfb_surfaces);
 		surf++;
+	}
+
+	if (fw_compat == DCP_FIRMWARE_V_27_0) {
+		bitmap_zero(dcp->iomfb_surfaces, DCP_MAX_PLANES);
+		set_bit(0, dcp->iomfb_surfaces);
 	}
 
 	if (dcp->phy) {
