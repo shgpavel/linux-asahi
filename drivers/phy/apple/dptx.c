@@ -16,6 +16,8 @@
 #include <asm/io.h>
 #include "linux/of.h"
 #include <dt-bindings/phy/phy.h>
+#include <linux/bitfield.h>
+#include <linux/delay.h>
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/phy/phy.h>
@@ -31,6 +33,7 @@
 enum apple_dptx_type {
 	DPTX_PHY_T8112,
 	DPTX_PHY_T6020,
+	DPTX_PHY_T8122,
 };
 
 struct apple_dptx_phy_hw {
@@ -42,7 +45,7 @@ struct apple_dptx_phy {
 
 	struct apple_dptx_phy_hw hw;
 
-	int dp_link_rate;
+	u32 dp_link_rate;
 
 	struct {
 		void __iomem *core;
@@ -56,6 +59,7 @@ struct apple_dptx_phy {
 
 	// TODO: m1n1 port things to clean up
 	u32 active_lanes;
+	bool active;
 };
 
 
@@ -77,12 +81,260 @@ static inline void clear32(void __iomem *reg, u32 clear)
 	mask32(reg, clear, 0);
 }
 
+struct t8122_pll_cfg {
+	u32 link_rate;
+	u32 f20b0;
+	u32 f20b4;
+	u32 f20b8;
+	bool bypass;
+	bool half;
+};
+
+static const struct t8122_pll_cfg t8122_pll_cfgs[] = {
+	{ 1620, 0x21c, 0x0000000, 0x156600, true, false },
+	{ 2700, 0x1c2, 0x7fffffe, 0x155200, true, true },
+	{ 5400, 0x1c2, 0x7fffffe, 0x554800, true, true },
+	{ 8100, 0x2a3, 0xbff7ffc, 0x564800, false, true },
+};
+
+static void t8122_field(struct apple_dptx_phy *phy, u32 off, u32 field, u32 val)
+{
+	mask32(phy->regs.dptx + off, field, field_prep(field, val));
+}
+
+static void t8122_bit(struct apple_dptx_phy *phy, u32 off, u32 bit, bool val)
+{
+	mask32(phy->regs.dptx + off, BIT(bit), val ? BIT(bit) : 0);
+}
+
+static void t8122_enable_device_power(struct apple_dptx_phy *phy, u32 dcp_index)
+{
+	static const u32 steps[][2] = { { 0x10, 0x20 }, { 0x100, 0x200 }, { 0x1, 0x2 } };
+	unsigned int i;
+
+	mask32(phy->regs.core + 0x10, GENMASK(3, 0), FIELD_PREP(GENMASK(3, 0), dcp_index));
+
+	for (i = 0; i < ARRAY_SIZE(steps); i++) {
+		set32(phy->regs.core + 0x48, steps[i][0]);
+		fsleep(1);
+		set32(phy->regs.core + 0x48, steps[i][1]);
+		fsleep(1);
+		clear32(phy->regs.core + 0x48, steps[i][1] << 1);
+		fsleep(1);
+	}
+}
+
+static void t8122_impedance_calibration(struct apple_dptx_phy *phy)
+{
+	u32 status, code;
+
+	t8122_bit(phy, 0x4224, 0, false);
+	fsleep(1000);
+	t8122_bit(phy, 0x4224, 0, true);
+	fsleep(1);
+	t8122_field(phy, 0x4200, GENMASK(9, 4), 0x3c);
+	fsleep(1);
+	t8122_bit(phy, 0x4200, 0, true);
+	fsleep(125);
+	status = readl(phy->regs.dptx + 0x4204);
+	fsleep(10);
+	t8122_bit(phy, 0x4200, 0, false);
+
+	code = FIELD_GET(GENMASK(24, 18), readl(phy->regs.dptx + 0x4210));
+	t8122_field(phy, 0x4228, GENMASK(22, 16), code);
+	t8122_bit(phy, 0x4228, 15, true);
+
+	if (!(status & BIT(0)))
+		dev_warn(phy->dev, "impedance calibration failed: status 0x%x code 0x%x\n",
+			 status, code);
+	else
+		dev_dbg(phy->dev, "impedance calibration status 0x%x code 0x%x\n",
+			status, code);
+}
+
+static int t8122_set_active_lane_count(struct apple_dptx_phy *phy, u32 num_lanes)
+{
+	u32 l;
+
+	if (num_lanes > DPTX_MAX_LANES)
+		return -EINVAL;
+
+	phy->active_lanes = num_lanes;
+	if (!phy->active)
+		return 0;
+
+	t8122_bit(phy, 0x4000, 26, true);
+	for (l = 0; l < DPTX_MAX_LANES; l++)
+		t8122_bit(phy, DPTX_LANE0_OFFSET + DPTX_LANE_STRIDE * l, 9, l >= num_lanes);
+	fsleep(1);
+	for (l = 0; l < DPTX_MAX_LANES; l++)
+		t8122_bit(phy, DPTX_LANE0_OFFSET + DPTX_LANE_STRIDE * l, 8, l >= num_lanes);
+	if (num_lanes > 0)
+		t8122_bit(phy, 0x4000, 26, false);
+
+	return 0;
+}
+
+static int t8122_activate(struct apple_dptx_phy *phy, u32 dcp_index)
+{
+	u32 loff;
+
+	t8122_enable_device_power(phy, dcp_index);
+
+	t8122_field(phy, 0x2014, GENMASK(23, 16), 0x30);
+	t8122_field(phy, 0x20b8, GENMASK(19, 16), 5);
+	t8122_field(phy, 0x2220, GENMASK(2, 0), 0);
+	t8122_bit(phy, 0x222c, 11, true);
+	t8122_bit(phy, 0x222c, 8, true);
+	t8122_field(phy, 0x2230, GENMASK(21, 17), 0x10);
+	t8122_bit(phy, 0x2278, 27, false);
+	t8122_bit(phy, 0x22a4, 0, true);
+
+	for (loff = DPTX_LANE0_OFFSET; loff < DPTX_LANE_END; loff += DPTX_LANE_STRIDE) {
+		t8122_field(phy, loff + 0x40, GENMASK(23, 20), 2);
+		t8122_bit(phy, loff + 0x40, 19, true);
+		t8122_bit(phy, loff + 0x244, 4, false);
+	}
+
+	t8122_bit(phy, 0x2218, 0, true);
+	t8122_field(phy, 0x2234, GENMASK(1, 0), 0);
+	t8122_bit(phy, 0x2200, 1, true);
+	t8122_bit(phy, 0x1000, 1, false);
+	t8122_bit(phy, 0x4004, 3, true);
+	fsleep(1);
+
+	phy->active = true;
+	t8122_set_active_lane_count(phy, phy->active_lanes);
+
+	t8122_bit(phy, 0xd000, 0, false);
+	t8122_impedance_calibration(phy);
+
+	return 0;
+}
+
+static void t8122_phy_power_down(struct apple_dptx_phy *phy)
+{
+	t8122_bit(phy, 0x4004, 0, true);
+	t8122_bit(phy, 0x4000, 6, false);
+	t8122_bit(phy, 0x4004, 3, false);
+	t8122_bit(phy, 0x4000, 25, false);
+	t8122_bit(phy, 0x4000, 24, false);
+}
+
+static void t8122_phy_power_up(struct apple_dptx_phy *phy)
+{
+	u32 loff;
+
+	for (loff = DPTX_LANE0_OFFSET; loff < DPTX_LANE_END; loff += DPTX_LANE_STRIDE)
+		t8122_field(phy, loff + 0x10, GENMASK(29, 27), 3);
+	t8122_bit(phy, 0x4000, 24, true);
+	fsleep(1);
+	t8122_bit(phy, 0x4000, 25, true);
+	fsleep(1);
+	t8122_bit(phy, 0x4004, 3, true);
+	t8122_bit(phy, 0x4000, 6, true);
+	t8122_bit(phy, 0x4004, 0, false);
+}
+
+static void t8122_pll_power_down(struct apple_dptx_phy *phy)
+{
+	u32 ack;
+
+	if (!(readl(phy->regs.dptx + 0x2200) & BIT(1)))
+		return;
+
+	t8122_bit(phy, 0x2200, 1, false);
+	t8122_field(phy, 0x100c, GENMASK(2, 0), 0);
+	t8122_bit(phy, 0x100c, 3, true);
+	fsleep(100);
+	ack = readl(phy->regs.dptx + 0x1014) & BIT(0);
+	t8122_bit(phy, 0x100c, 3, false);
+
+	if (!ack)
+		dev_warn(phy->dev, "no ack to PLL power down: 0x1008 = 0x%x\n",
+			 readl(phy->regs.dptx + 0x1008));
+}
+
+static void t8122_pll_power_up(struct apple_dptx_phy *phy)
+{
+	u32 ack, lock;
+
+	t8122_field(phy, 0x100c, GENMASK(2, 0), 7);
+	t8122_bit(phy, 0x100c, 3, true);
+	fsleep(100);
+	ack = readl(phy->regs.dptx + 0x1014) & BIT(0);
+	t8122_bit(phy, 0x100c, 3, false);
+	lock = readl(phy->regs.dptx + 0x1008) & BIT(3);
+	t8122_bit(phy, 0x2200, 1, true);
+
+	if (!ack)
+		dev_warn(phy->dev, "no ack to PLL power up\n");
+	if (!lock)
+		dev_warn(phy->dev, "PLL not locked\n");
+}
+
+static void t8122_shadow_update(struct apple_dptx_phy *phy)
+{
+	set32(phy->regs.core + 0xa0, 0x8);
+	set32(phy->regs.core + 0xa0, 0x4);
+	set32(phy->regs.core + 0xa0, 0x40000);
+	clear32(phy->regs.core + 0xa0, 0x40000);
+	set32(phy->regs.core + 0xa0, 0x80000);
+	clear32(phy->regs.core + 0xa0, 0x80000);
+	clear32(phy->regs.core + 0xa0, 0x4);
+	clear32(phy->regs.core + 0xa0, 0x8);
+}
+
+static int t8122_set_link_rate(struct apple_dptx_phy *phy, u32 link_rate)
+{
+	const struct t8122_pll_cfg *cfg = NULL;
+	unsigned int i;
+
+	dev_dbg(phy->dev, "set_link_rate(%u)\n", link_rate);
+
+	if (link_rate) {
+		for (i = 0; i < ARRAY_SIZE(t8122_pll_cfgs); i++) {
+			if (t8122_pll_cfgs[i].link_rate == link_rate)
+				cfg = &t8122_pll_cfgs[i];
+		}
+		if (!cfg) {
+			dev_err(phy->dev, "Unsupported link rate: %u\n", link_rate);
+			return -EINVAL;
+		}
+	}
+
+	if (link_rate == phy->dp_link_rate)
+		return 0;
+
+	t8122_phy_power_down(phy);
+	t8122_pll_power_down(phy);
+
+	if (cfg) {
+		t8122_field(phy, 0x20b0, GENMASK(9, 0), cfg->f20b0);
+		t8122_field(phy, 0x20b4, GENMASK(27, 0), cfg->f20b4);
+		mask32(phy->regs.dptx + 0x20b8, GENMASK(22, 9), cfg->f20b8);
+		t8122_bit(phy, 0x222c, 1, cfg->bypass);
+		t8122_shadow_update(phy);
+		t8122_bit(phy, 0x2000, 29, !cfg->half);
+		t8122_bit(phy, 0x201c, 5, !cfg->half);
+		t8122_pll_power_up(phy);
+		t8122_phy_power_up(phy);
+	}
+
+	phy->dp_link_rate = link_rate;
+
+	return 0;
+}
+
 
 static int dptx_phy_set_active_lane_count(struct apple_dptx_phy *phy, u32 num_lanes)
 {
 	u32 l, ctrl;
 
 	dev_dbg(phy->dev, "set_active_lane_count(%u)\n", num_lanes);
+
+	if (phy->hw.type == DPTX_PHY_T8122)
+		return t8122_set_active_lane_count(phy, num_lanes);
 
 	if (num_lanes == 3 || num_lanes > DPTX_MAX_LANES)
 		return -1;
@@ -129,6 +381,9 @@ static int dptx_phy_activate(struct apple_dptx_phy *phy, u32 dcp_index)
 	u32 val_4408;
 
 	dev_dbg(phy->dev, "activate(dcp:%u)\n", dcp_index);
+
+	if (phy->hw.type == DPTX_PHY_T8122)
+		return t8122_activate(phy, dcp_index);
 
 	// MMIO: R.4   0x23c500010 (dptx-phy[1], offset 0x10) = 0x0
 	// MMIO: W.4   0x23c500010 (dptx-phy[1], offset 0x10) = 0x0
@@ -580,6 +835,13 @@ static int dptx_phy_configure(struct phy *phy, union phy_configure_opts *opts_)
 		mutex_unlock(&dptx_phy->lock);
 	}
 
+	if (opts->set_rate && dptx_phy->hw.type == DPTX_PHY_T8122) {
+		mutex_lock(&dptx_phy->lock);
+		ret = t8122_set_link_rate(dptx_phy, opts->link_rate);
+		mutex_unlock(&dptx_phy->lock);
+		return ret;
+	}
+
 	if (opts->set_rate) {
 		switch (opts->link_rate) {
 		case 1620:
@@ -667,9 +929,14 @@ static const struct apple_dptx_phy_hw apple_dptx_hw_t8112 = {
 	.type = DPTX_PHY_T8112,
 };
 
+static const struct apple_dptx_phy_hw apple_dptx_hw_t8122 = {
+	.type = DPTX_PHY_T8122,
+};
+
 static const struct of_device_id dptx_phy_match[] = {
 	{ .compatible = "apple,t6020-dptx-phy", .data = &apple_dptx_hw_t6020 },
 	{ .compatible = "apple,t8112-dptx-phy", .data = &apple_dptx_hw_t8112 },
+	{ .compatible = "apple,t8122-dptx-phy", .data = &apple_dptx_hw_t8122 },
 	{},
 };
 MODULE_DEVICE_TABLE(of, dptx_phy_match);
