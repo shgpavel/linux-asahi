@@ -883,10 +883,12 @@ static int dcp_get_disp_regs(struct apple_dcp *dcp)
 	}
 
 	/* load pmgr bandwidth scratch resource and offset */
-	ret = dcp_get_bw_scratch_reg(dcp, count);
-	if (ret < 0)
-		return ret;
-	count += 1;
+	if (of_property_present(dcp->dev->of_node, "apple,bw-scratch")) {
+		ret = dcp_get_bw_scratch_reg(dcp, count);
+		if (ret < 0)
+			return ret;
+		count += 1;
+	}
 
 	/* load pmgr bandwidth doorbell resource if present (only on t8103) */
 	if (of_property_present(dcp->dev->of_node, "apple,bw-doorbell")) {
@@ -976,6 +978,8 @@ static enum dcp_firmware_version dcp_check_firmware_version(struct device *dev)
 	else if (strncmp(compat_str, "14.7.0", sizeof(compat_str)) == 0 &&
 		(strncmp(fw_str, "14.7.0", sizeof(compat_str)) == 0))
 		return DCP_FIRMWARE_V_14_7;
+	else if (strncmp(compat_str, "27.0.0", sizeof(compat_str)) == 0)
+		return DCP_FIRMWARE_V_27_0;
 
 	dev_err(dev, "DCP firmware-compat %s (FW: %s) is not supported\n",
 		compat_str, fw_str);
@@ -1180,7 +1184,8 @@ static int dcp_platform_probe(struct platform_device *pdev)
 	 * device trees. This prevents replacing simpledrm and ending up without
 	 * display.
 	 */
-	if (!of_property_present(dev->of_node, "apple,bw-scratch"))
+	if (fw_compat < DCP_FIRMWARE_V_27_0 &&
+	    !of_property_present(dev->of_node, "apple,bw-scratch"))
 		return dev_err_probe(dev, -ENODEV, "Incompatible devicetree! "
 			"Use devicetree matching this kernel.\n");
 
