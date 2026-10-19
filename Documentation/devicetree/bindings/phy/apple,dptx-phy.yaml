@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/phy/apple,dptx-phy.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Apple DisplayPort TX PHY
+
+maintainers:
+  - Janne Grunau <j@jannau.net>
+
+description:
+  The DisplayPort TX PHY drives the DisplayPort link of a display coprocessor
+  (DCP) on Apple Silicon SoCs. On desktop machines it feeds the on-board
+  DisplayPort to HDMI converter behind the HDMI port.
+
+properties:
+  compatible:
+    oneOf:
+      - items:
+          - enum:
+              - apple,t6020-dptx-phy
+              - apple,t8112-dptx-phy
+          - const: apple,dptx-phy
+      - items:
+          - const: apple,t8132-dptx-phy
+          - const: apple,t8122-dptx-phy
+      - const: apple,t8122-dptx-phy
+
+  reg:
+    items:
+      - description: Common controls, the DCP input select and PLL shadow update
+      - description: PHY controls, PLL, impedance calibration and lanes
+
+  reg-names:
+    items:
+      - const: core
+      - const: dptx
+
+  power-domains:
+    maxItems: 1
+
+  "#phy-cells":
+    const: 0
+
+  "#reset-cells":
+    const: 0
+
+required:
+  - compatible
+  - reg
+  - reg-names
+  - power-domains
+  - "#phy-cells"
+
+additionalProperties: false
+
+examples:
+  - |
+    soc {
+        #address-cells = <2>;
+        #size-cells = <2>;
+
+        phy@39a700000 {
+            compatible = "apple,t8132-dptx-phy", "apple,t8122-dptx-phy";
+            reg = <0x3 0x9a700000 0x0 0x4000>,
+                  <0x3 0x9a740000 0x0 0x10000>;
+            reg-names = "core", "dptx";
+            power-domains = <&ps_dptx_phy>;
+            #phy-cells = <0>;
+            #reset-cells = <0>;
+        };
+    };
