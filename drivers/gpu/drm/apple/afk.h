@@ -71,16 +71,6 @@ struct apple_epic_service_ops {
 	void (*teardown)(struct apple_epic_service *service);
 };
 
-struct afk_ringbuffer_header {
-	__le32 bufsz;
-	u32 unk;
-	u32 _pad1[14];
-	__le32 rptr;
-	u32 _pad2[15];
-	__le32 wptr;
-	u32 _pad3[15];
-};
-
 struct afk_qe {
 #define QE_MAGIC 0x20504f49 // ' POI'
 	__le32 magic;
@@ -152,7 +142,8 @@ enum epic_subtype {
 
 struct afk_ringbuffer {
 	bool ready;
-	struct afk_ringbuffer_header *hdr;
+	void *base;
+	u32 blksz;
 	u32 rptr;
 	void *buf;
 	size_t bufsz;

@@ -48,6 +48,16 @@ enum rbep_msg_type {
 
 #define SEND_WPTR GENMASK(31, 0)
 
+static __le32 *afk_rb_rptr(struct afk_ringbuffer *bfr)
+{
+	return bfr->base + bfr->blksz;
+}
+
+static __le32 *afk_rb_wptr(struct afk_ringbuffer *bfr)
+{
+	return bfr->base + 2 * bfr->blksz;
+}
+
 static void afk_send(struct apple_dcp_afkep *ep, u64 message)
 {
 	dcp_send_message(ep->dcp, ep->endpoint, message);
@@ -116,7 +126,7 @@ int afk_start(struct apple_dcp_afkep *ep)
 
 static void afk_getbuf(struct apple_dcp_afkep *ep, u64 message)
 {
-	u16 size = FIELD_GET(GETBUF_SIZE, message) << BLOCK_SHIFT;
+	u32 size = FIELD_GET(GETBUF_SIZE, message) << BLOCK_SHIFT;
 	u16 tag = FIELD_GET(GETBUF_TAG, message);
 	u64 reply;
 
@@ -131,7 +141,7 @@ static void afk_getbuf(struct apple_dcp_afkep *ep, u64 message)
 	ep->bfr = dmam_alloc_coherent(ep->dcp->dev, size, &ep->bfr_dma,
 				      GFP_KERNEL);
 	if (!ep->bfr) {
-		dev_err(ep->dcp->dev, "Failed to allocate %d bytes buffer\n",
+		dev_err(ep->dcp->dev, "Failed to allocate %u bytes buffer\n",
 			size);
 		return;
 	}
@@ -147,8 +157,8 @@ static void afk_getbuf(struct apple_dcp_afkep *ep, u64 message)
 static void afk_init_rxtx(struct apple_dcp_afkep *ep, u64 message,
 			  struct afk_ringbuffer *bfr)
 {
-	u16 base = FIELD_GET(INITRB_OFFSET, message) << BLOCK_SHIFT;
-	u16 size = FIELD_GET(INITRB_SIZE, message) << BLOCK_SHIFT;
+	u32 base = FIELD_GET(INITRB_OFFSET, message) << BLOCK_SHIFT;
+	u32 size = FIELD_GET(INITRB_SIZE, message) << BLOCK_SHIFT;
 	u16 tag = FIELD_GET(INITRB_TAG, message);
 	u32 bufsz, end;
 
@@ -179,16 +189,18 @@ static void afk_init_rxtx(struct apple_dcp_afkep *ep, u64 message,
 		return;
 	}
 
-	bfr->hdr = ep->bfr + base;
-	bufsz = le32_to_cpu(bfr->hdr->bufsz);
-	if (bufsz + sizeof(*bfr->hdr) != size) {
+	bfr->base = ep->bfr + base;
+	bufsz = le32_to_cpu(*(__le32 *)bfr->base);
+	if (bufsz >= size || (size - bufsz) % 3 ||
+	    ((size - bufsz) / 3) % (1 << BLOCK_SHIFT)) {
 		dev_err(ep->dcp->dev,
-			"AFK[ep:%02x]: ring buffer size 0x%x != expected 0x%lx\n",
-			ep->endpoint, bufsz, sizeof(*bfr->hdr));
+			"AFK[ep:%02x]: ring buffer size 0x%x does not fit 0x%x\n",
+			ep->endpoint, bufsz, size);
 		return;
 	}
 
-	bfr->buf = bfr->hdr + 1;
+	bfr->blksz = (size - bufsz) / 3;
+	bfr->buf = bfr->base + 3 * bfr->blksz;
 	bfr->bufsz = bufsz;
 	bfr->ready = true;
 
@@ -596,8 +608,8 @@ static bool afk_recv(struct apple_dcp_afkep *ep)
 		return false;
 	}
 
-	rptr = le32_to_cpu(ep->rxbfr.hdr->rptr);
-	wptr = le32_to_cpu(ep->rxbfr.hdr->wptr);
+	rptr = le32_to_cpu(*afk_rb_rptr(&ep->rxbfr));
+	wptr = le32_to_cpu(*afk_rb_wptr(&ep->rxbfr));
 	trace_afk_recv_rwptr_pre(ep, rptr, wptr);
 
 	if (rptr == wptr)
@@ -642,7 +654,7 @@ static bool afk_recv(struct apple_dcp_afkep *ep)
 			return false;
 		}
 
-		ep->rxbfr.hdr->rptr = cpu_to_le32(rptr);
+		*afk_rb_rptr(&ep->rxbfr) = cpu_to_le32(rptr);
 	}
 
 	if (rptr + size + sizeof(*hdr) > ep->rxbfr.bufsz) {
@@ -655,7 +667,7 @@ static bool afk_recv(struct apple_dcp_afkep *ep)
 	channel = le32_to_cpu(hdr->channel);
 	type = le32_to_cpu(hdr->type);
 
-	rptr = ALIGN(rptr + sizeof(*hdr) + size, 1 << BLOCK_SHIFT);
+	rptr = roundup(rptr + sizeof(*hdr) + size, ep->rxbfr.blksz);
 	if (WARN_ON(rptr > ep->rxbfr.bufsz))
 		rptr = 0;
 	if (rptr == ep->rxbfr.bufsz)
@@ -663,7 +675,7 @@ static bool afk_recv(struct apple_dcp_afkep *ep)
 
 	dma_mb();
 
-	ep->rxbfr.hdr->rptr = cpu_to_le32(rptr);
+	*afk_rb_rptr(&ep->rxbfr) = cpu_to_le32(rptr);
 	trace_afk_recv_rwptr_post(ep, rptr, wptr);
 
 	/*
@@ -755,8 +767,8 @@ int afk_send_epic(struct apple_dcp_afkep *ep, u32 channel, u16 tag,
 	spin_lock_irqsave(&ep->lock, flags);
 
 	dma_rmb();
-	rptr = le32_to_cpu(ep->txbfr.hdr->rptr);
-	wptr = le32_to_cpu(ep->txbfr.hdr->wptr);
+	rptr = le32_to_cpu(*afk_rb_rptr(&ep->txbfr));
+	wptr = le32_to_cpu(*afk_rb_wptr(&ep->txbfr));
 	trace_afk_send_rwptr_pre(ep, rptr, wptr);
 	total_epic_size = sizeof(*ehdr) + sizeof(*eshdr) + payload_len;
 	total_size = sizeof(*hdr) + total_epic_size;
@@ -869,12 +881,12 @@ int afk_send_epic(struct apple_dcp_afkep *ep, u32 channel, u16 tag,
 
 	memcpy(ep->txbfr.buf + wptr, payload, payload_len);
 	wptr += payload_len;
-	wptr = ALIGN(wptr, 1 << BLOCK_SHIFT);
+	wptr = roundup(wptr, ep->txbfr.blksz);
 	if (wptr == ep->txbfr.bufsz)
 		wptr = 0;
 	trace_afk_send_rwptr_post(ep, rptr, wptr);
 
-	ep->txbfr.hdr->wptr = cpu_to_le32(wptr);
+	*afk_rb_wptr(&ep->txbfr) = cpu_to_le32(wptr);
 	afk_send(ep, FIELD_PREP(RBEP_TYPE, RBEP_SEND) |
 			     FIELD_PREP(SEND_WPTR, wptr));
 	ret = 0;
