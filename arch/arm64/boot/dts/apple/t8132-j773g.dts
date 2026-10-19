@@ -81,6 +81,18 @@
 	status = "okay";
 };
 
+&dptxphy {
+	status = "okay";
+};
+
+&dcp {
+	apple,connector-type = "HDMI-A";
+	hdmi-hpd-gpios = <&pinctrl_aop 41 GPIO_ACTIVE_HIGH>;
+	phys = <&dptxphy>;
+	phy-names = "dp-phy";
+	apple,dptx-phy = <4>;
+};
+
 /*
  * Keep the power-domains used for the HDMI port on.
  */

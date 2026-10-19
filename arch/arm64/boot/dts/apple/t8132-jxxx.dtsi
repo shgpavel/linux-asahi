@@ -11,6 +11,9 @@
 
 / {
 	aliases {
+		dcp = &dcp;
+		disp0 = &display;
+		disp0-piodma = &disp0_piodma;
 		serial0 = &serial0;
 	};
 
