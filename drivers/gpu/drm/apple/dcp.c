@@ -395,7 +395,9 @@ static int dcp_dptx_connect(struct apple_dcp *dcp, u32 port)
 
 	usleep_range(5, 10);
 
-	if (dcp->connector_type == DRM_MODE_CONNECTOR_DisplayPort)
+	if (dcp->connector_type == DRM_MODE_CONNECTOR_DisplayPort ||
+	    (dcp->connector_type == DRM_MODE_CONNECTOR_HDMIA &&
+	     dcp->fw_compat >= DCP_FIRMWARE_V_27_0))
 		dptxport_set_hpd(dcp->dptxport[port].service, true);
 
 	if (dcp->avep)

@@ -30,6 +30,8 @@ enum dptx_apcall {
 	DPTX_APCALL_DEVICE_NOT_RESPONDING = 22,
 	DPTX_APCALL_DEVICE_BUSY_TIMEOUT = 23,
 	DPTX_APCALL_DEVICE_NOT_STARTED = 24,
+	DPTX_APCALL_SET_RESOURCE_AVAILABLE = 25,
+	DPTX_APCALL_GET_VIRTUAL_DEVICE_MODE = 26,
 };
 
 #define DCPDPTX_REMOTE_PORT_CORE GENMASK(3, 0)
@@ -56,6 +58,7 @@ struct dptx_port {
 	struct phy *atcphy;
 	struct mux_control *mux;
 	u32 lane_count;
+	u32 active_lane_count;
 	u32 link_rate, pending_link_rate;
 	u32 drive_settings[2];
 };

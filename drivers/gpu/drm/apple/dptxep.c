@@ -17,16 +17,24 @@ struct dcpdptx_connection_cmd {
 	__le32 target;
 } __attribute__((packed));
 
+struct dcpdptx_connection_resp {
+	__le32 unk;
+	__le32 target;
+	u8 _pad0[8];
+	__le32 status;
+} __packed;
+
 struct dcpdptx_hotplug_cmd {
 	u8 _pad0[16];
-	__le32 unk;
+	__le64 asserted;
+	u8 _pad1[8];
 } __attribute__((packed));
 
 struct dptxport_apcall_link_rate {
 	__le32 retcode;
 	u8 _unk0[12];
-	__le32 link_rate;
-	u8 _unk1[12];
+	__le64 link_rate;
+	u8 _unk1[8];
 } __attribute__((packed));
 
 struct dptxport_apcall_lane_count {
@@ -46,9 +54,24 @@ struct dptxport_apcall_set_active_lane_count {
 struct dptxport_apcall_get_support {
 	__le32 retcode;
 	u8 _unk0[12];
-	__le32 supported;
-	u8 _unk1[12];
+	__le64 supported;
+	u8 _unk1[8];
 } __attribute__((packed));
+
+struct dptxport_apcall_get_supports_downspread {
+	u8 _unk0[16];
+	__le32 retcode;
+	u8 _unk1[12];
+	u8 supported;
+	u8 _unk2[15];
+} __packed;
+
+struct dptxport_apcall_virtual_device_mode {
+	__le32 retcode;
+	u8 _unk0[12];
+	__le64 mode;
+	u8 _unk1[8];
+} __packed;
 
 struct dptxport_apcall_max_drive_settings {
 	__le32 retcode;
@@ -68,6 +91,11 @@ struct dptxport_apcall_drive_settings {
 	__le32 unk6;
 	__le32 unk7;
 };
+
+static bool dptxport_fw_v27(struct apple_epic_service *service)
+{
+	return service->ep->dcp->fw_compat >= DCP_FIRMWARE_V_27_0;
+}
 
 int dptxport_validate_connection(struct apple_epic_service *service, u8 core,
 				 u8 atc, u8 die)
@@ -101,7 +129,8 @@ int dptxport_connect(struct apple_epic_service *service, u8 core, u8 atc,
 		     u8 die)
 {
 	struct dptx_port *dptx = service->cookie;
-	struct dcpdptx_connection_cmd cmd, resp;
+	struct dcpdptx_connection_cmd cmd;
+	struct dcpdptx_connection_resp resp;
 	u32 unk_field = 0x0; // seen as 0x100 under some conditions
 	int ret;
 	u32 target = FIELD_PREP(DCPDPTX_REMOTE_PORT_CORE, core) |
@@ -114,12 +143,17 @@ int dptxport_connect(struct apple_epic_service *service, u8 core, u8 atc,
 	cmd.target = cpu_to_le32(target);
 	cmd.unk = cpu_to_le32(unk_field);
 	ret = afk_service_call(service, 0, 11, &cmd, sizeof(cmd), 24, &resp,
-			       sizeof(resp), 24);
+			       sizeof(resp), 32 - sizeof(resp));
 	if (ret)
 		return ret;
 
 	if (le32_to_cpu(resp.target) != target)
 		return -EINVAL;
+	if (dptxport_fw_v27(service) && le32_to_cpu(resp.status)) {
+		dev_err(service->ep->dcp->dev, "connect to 0x%x failed: 0x%x\n",
+			target, le32_to_cpu(resp.status));
+		return -EIO;
+	}
 	if (le32_to_cpu(resp.unk) != unk_field)
 		dev_notice(service->ep->dcp->dev, "unexpected unk field in reply: 0x%x (0x%x)\n",
 			  le32_to_cpu(resp.unk), unk_field);
@@ -145,13 +179,17 @@ int dptxport_set_hpd(struct apple_epic_service *service, bool hpd)
 	memset(&cmd, 0, sizeof(cmd));
 
 	if (hpd)
-		cmd.unk = cpu_to_le32(1);
+		cmd.asserted = cpu_to_le64(1);
 
-	ret = afk_service_call(service, 8, 8, &cmd, sizeof(cmd), 12, &resp,
-			       sizeof(resp), 12);
+	if (dptxport_fw_v27(service))
+		return afk_service_call(service, 8, 8, &cmd, sizeof(cmd), 0,
+					NULL, 0, sizeof(cmd));
+
+	ret = afk_service_call(service, 8, 8, &cmd, sizeof(cmd), 0, &resp,
+			       sizeof(resp), 0);
 	if (ret)
 		return ret;
-	if (le32_to_cpu(resp.unk) != 1)
+	if (lower_32_bits(le64_to_cpu(resp.asserted)) != 1)
 		return -EINVAL;
 	return 0;
 }
@@ -240,7 +278,7 @@ static int dptxport_call_get_max_link_rate(struct apple_epic_service *service,
 		return -EINVAL;
 
 	reply->retcode = cpu_to_le32(0);
-	reply->link_rate = cpu_to_le32(LINK_RATE_HBR3);
+	reply->link_rate = cpu_to_le64(LINK_RATE_HBR3);
 
 	return 0;
 }
@@ -298,6 +336,9 @@ static int dptxport_call_set_active_lane_count(struct apple_epic_service *servic
 
 	u64 lane_count = le64_to_cpu(request->lane_count);
 
+	if (dptxport_fw_v27(service))
+		lane_count = lower_32_bits(lane_count);
+
 	if (dptx->lane_count < lane_count)
 		dev_err(dcp->dev, "set_active_lane_count: unexpected lane "
 			"count:%llu phy: %d\n", lane_count, dptx->lane_count);
@@ -309,6 +350,7 @@ static int dptxport_call_set_active_lane_count(struct apple_epic_service *servic
 		// Use dptx phy index > 3 as indication for dptx-phy or
 		// lpdptx-phy and configure the number of lanes for those
 		dptx->phy_ops.dp.set_lanes = (dcp->dptx_phy > 3);
+		dptx->active_lane_count = lane_count;
 		break;
 	default:
 		dev_err(dcp->dev, "set_active_lane_count: invalid lane count:%llu\n", lane_count);
@@ -346,7 +388,23 @@ static int dptxport_call_get_link_rate(struct apple_epic_service *service,
 		return -EINVAL;
 
 	reply->retcode = cpu_to_le32(0);
-	reply->link_rate = cpu_to_le32(dptx->link_rate);
+	reply->link_rate = cpu_to_le64(dptx->link_rate);
+
+	return 0;
+}
+
+static int
+dptxport_call_get_active_lane_count(struct apple_epic_service *service,
+				    void *reply_, size_t reply_size)
+{
+	struct dptx_port *dptx = service->cookie;
+	struct dptxport_apcall_lane_count *reply = reply_;
+
+	if (reply_size < sizeof(*reply))
+		return -EINVAL;
+
+	reply->retcode = cpu_to_le32(0);
+	reply->lane_count = cpu_to_le64(dptx->active_lane_count);
 
 	return 0;
 }
@@ -366,6 +424,9 @@ dptxport_call_will_change_link_config(struct apple_epic_service *service)
 static int
 dptxport_call_did_change_link_config(struct apple_epic_service *service)
 {
+	if (dptxport_fw_v27(service))
+		return 0;
+
 	/* assume the link config did change and wait a little bit */
 	mdelay(10);
 
@@ -388,7 +449,10 @@ static int dptxport_call_set_link_rate(struct apple_epic_service *service,
 	if (data_size < sizeof(*request))
 		return -EINVAL;
 
-	link_rate = le32_to_cpu(request->link_rate);
+	if (dptxport_fw_v27(service))
+		link_rate = le64_to_cpu(request->link_rate) & 0xff;
+	else
+		link_rate = lower_32_bits(le64_to_cpu(request->link_rate));
 	trace_dptxport_call_set_link_rate(dptx, link_rate);
 
 	switch (link_rate) {
@@ -438,7 +502,7 @@ static int dptxport_call_set_link_rate(struct apple_epic_service *service,
 
 	//dptx->pending_link_rate = link_rate;
 	reply->retcode = cpu_to_le32(0);
-	reply->link_rate = cpu_to_le32(link_rate);
+	reply->link_rate = cpu_to_le64(link_rate);
 
 	return 0;
 }
@@ -447,12 +511,13 @@ static int dptxport_call_get_supports_hpd(struct apple_epic_service *service,
 					  void *reply_, size_t reply_size)
 {
 	struct dptxport_apcall_get_support *reply = reply_;
+	struct apple_dcp *dcp = service->ep->dcp;
 
 	if (reply_size < sizeof(*reply))
 		return -EINVAL;
 
 	reply->retcode = cpu_to_le32(0);
-	reply->supported = cpu_to_le32(0);
+	reply->supported = cpu_to_le64(dptxport_fw_v27(service) && dcp->hdmi_hpd);
 	return 0;
 }
 
@@ -462,11 +527,46 @@ dptxport_call_get_supports_downspread(struct apple_epic_service *service,
 {
 	struct dptxport_apcall_get_support *reply = reply_;
 
+	if (dptxport_fw_v27(service)) {
+		struct dptxport_apcall_get_supports_downspread *reply_v27 = reply_;
+
+		if (reply_size < sizeof(*reply_v27))
+			return -EINVAL;
+
+		reply_v27->retcode = cpu_to_le32(0);
+		reply_v27->supported = 0;
+		return 0;
+	}
+
 	if (reply_size < sizeof(*reply))
 		return -EINVAL;
 
 	reply->retcode = cpu_to_le32(0);
-	reply->supported = cpu_to_le32(0);
+	reply->supported = cpu_to_le64(0);
+	return 0;
+}
+
+static int
+dptxport_call_get_virtual_device_mode(struct apple_epic_service *service,
+				      void *reply_, size_t reply_size)
+{
+	struct dptxport_apcall_virtual_device_mode *reply = reply_;
+
+	if (reply_size < sizeof(*reply))
+		return -EINVAL;
+
+	reply->retcode = cpu_to_le32(0);
+	reply->mode = cpu_to_le64(0);
+	return 0;
+}
+
+static int dptxport_call_ack(const void *data, size_t data_size, void *reply,
+			     size_t reply_size)
+{
+	memcpy(reply, data, min(reply_size, data_size));
+	if (reply_size >= 4)
+		memset(reply, 0, 4);
+
 	return 0;
 }
 
@@ -483,11 +583,7 @@ dptxport_call_activate(struct apple_epic_service *service,
 	if (!dcp->typec_mux)
 		phy_set_mode_ext(dptx->atcphy, PHY_MODE_DP, dcp->index);
 
-	memcpy(reply, data, min(reply_size, data_size));
-	if (reply_size >= 4)
-		memset(reply, 0, 4);
-
-	return 0;
+	return dptxport_call_ack(data, data_size, reply, reply_size);
 }
 
 static int
@@ -500,11 +596,7 @@ dptxport_call_deactivate(struct apple_epic_service *service,
 	/* deactivate phy */
 	phy_set_mode_ext(dptx->atcphy, PHY_MODE_INVALID, 0);
 
-	memcpy(reply, data, min(reply_size, data_size));
-	if (reply_size >= 4)
-		memset(reply, 0, 4);
-
-	return 0;
+	return dptxport_call_ack(data, data_size, reply, reply_size);
 }
 
 static int dptxport_call(struct apple_epic_service *service, u32 idx,
@@ -553,18 +645,33 @@ static int dptxport_call(struct apple_epic_service *service, u32 idx,
 	case DPTX_APCALL_DEACTIVATE:
 		return dptxport_call_deactivate(service, data, data_size,
 						reply, reply_size);
-	default:
-		/* just try to ACK and hope for the best... */
-		dev_info(service->ep->dcp->dev, "DPTXPort: acking unhandled call %u\n",
-			idx);
-		fallthrough;
+	case DPTX_APCALL_GET_ACTIVE_LANE_COUNT:
+		if (dptxport_fw_v27(service))
+			return dptxport_call_get_active_lane_count(service, reply,
+								   reply_size);
+		break;
+	case DPTX_APCALL_GET_VIRTUAL_DEVICE_MODE:
+		if (dptxport_fw_v27(service))
+			return dptxport_call_get_virtual_device_mode(service, reply,
+								     reply_size);
+		break;
+	case DPTX_APCALL_SET_TILED_DISPLAY_HINTS:
+	case DPTX_APCALL_SET_RESOURCE_AVAILABLE:
+		if (dptxport_fw_v27(service))
+			return dptxport_call_ack(data, data_size, reply,
+						 reply_size);
+		break;
 	case DPTX_APCALL_GET_DOWN_SPREAD:
 	case DPTX_APCALL_SET_DOWN_SPREAD:
-		memcpy(reply, data, min(reply_size, data_size));
-		if (reply_size >= 4)
-			memset(reply, 0, 4);
-		return 0;
+		return dptxport_call_ack(data, data_size, reply, reply_size);
+	default:
+		break;
 	}
+
+	/* just try to ACK and hope for the best... */
+	dev_info(service->ep->dcp->dev, "DPTXPort: acking unhandled call %u\n",
+		 idx);
+	return dptxport_call_ack(data, data_size, reply, reply_size);
 }
 
 static void dptxport_init(struct apple_epic_service *service, const char *name,
