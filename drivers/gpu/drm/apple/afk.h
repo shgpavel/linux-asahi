@@ -9,6 +9,7 @@
 
 #include <linux/completion.h>
 #include <linux/kconfig.h>
+#include <linux/sizes.h>
 #include <linux/types.h>
 
 #include "dcp.h"
@@ -140,6 +141,67 @@ enum epic_subtype {
 	EPIC_SUBTYPE_STD_SERVICE = 0xc0,
 };
 
+struct epic_v2_hdr {
+	u8 seq;
+	u8 _pad;
+	__le16 iid;
+	__le32 length;
+} __packed;
+
+struct epic_v2_msg_hdr {
+	__le64 tag;
+	u8 type;
+	u8 kind;
+	u8 flags;
+	u8 _pad[5];
+} __packed;
+
+struct epic_v2_cmd_hdr {
+#define EPIC_V2_CMD_OOB BIT(0)
+	u8 flags;
+	u8 seq;
+	__le16 _pad;
+	__le32 value;
+} __packed;
+
+struct epic_v2_oob {
+	__le64 rsp_addr;
+	__le64 cmd_addr;
+	__le32 rsp_len;
+	__le32 cmd_len;
+} __packed;
+
+#define EPIC_V2_SPLIT 0x404
+#define EPIC_V2_MAX_LENGTH SZ_1M
+
+enum epic_v2_kind {
+	EPIC_V2_KIND_REPORT = 0,
+	EPIC_V2_KIND_COMMAND = 1,
+	EPIC_V2_KIND_RESPONSE = 2,
+};
+
+enum epic_v2_report {
+	EPIC_V2_REPORT_PUBLISH = 0x11,
+	EPIC_V2_REPORT_OPEN = 0x12,
+	EPIC_V2_REPORT_CLOSE = 0x13,
+	EPIC_V2_REPORT_TERMINATE = 0x14,
+};
+
+enum epic_v2_internal {
+	EPIC_V2_INTERNAL_PAUSE = 2,
+	EPIC_V2_INTERNAL_PAUSE_DONE = 3,
+	EPIC_V2_INTERNAL_RESUME = 4,
+	EPIC_V2_INTERNAL_RESUME_DONE = 5,
+};
+
+struct afk_v2_frag {
+	bool active;
+	u16 iid;
+	size_t len;
+	size_t total;
+	u8 *buf;
+};
+
 struct afk_ringbuffer {
 	bool ready;
 	void *base;
@@ -176,6 +238,10 @@ struct apple_dcp_afkep {
 	struct dentry *debugfs_entry;
 
 	bool match_epic_name;
+
+	bool framing_known;
+	bool v2;
+	struct afk_v2_frag frag[AFK_MAX_CHANNEL];
 };
 
 struct apple_dcp_afkep *afk_init(struct apple_dcp *dcp, u32 endpoint,

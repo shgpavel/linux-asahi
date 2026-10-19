@@ -4,11 +4,15 @@
 #include <linux/bitfield.h>
 #include <linux/debugfs.h>
 #include <linux/dma-mapping.h>
+#include <linux/io.h>
+#include <linux/iommu.h>
 #include <linux/kconfig.h>
 #include <linux/of_platform.h>
 #include <linux/slab.h>
 #include <linux/workqueue.h>
 #include <linux/soc/apple/rtkit.h>
+
+#include <linux/unaligned.h>
 
 #include "afk.h"
 #include "trace.h"
@@ -99,7 +103,7 @@ out_free_afkep:
 void afk_shutdown(struct apple_dcp_afkep *afkep)
 {
 	afk_send(afkep, FIELD_PREP(RBEP_TYPE, RBEP_SHUTDOWN));
-	int ret;
+	int ret, i;
 
 	ret = wait_for_completion_timeout(&afkep->stopped, msecs_to_jiffies(1000));
 	if (ret <= 0) {
@@ -107,6 +111,12 @@ void afk_shutdown(struct apple_dcp_afkep *afkep)
 	}
 
 	destroy_workqueue(afkep->wq);
+
+	for (i = 0; i < AFK_MAX_CHANNEL; i++) {
+		kvfree(afkep->frag[i].buf);
+		afkep->frag[i].buf = NULL;
+		afkep->frag[i].active = false;
+	}
 }
 
 int afk_start(struct apple_dcp_afkep *ep)
@@ -250,8 +260,18 @@ static struct apple_epic_service *afk_epic_find_service(struct apple_dcp_afkep *
     return NULL;
 }
 
-static void afk_recv_handle_init(struct apple_dcp_afkep *ep, u32 channel,
-				 u8 *payload, size_t payload_size)
+static struct apple_epic_service *afk_epic_find_channel(struct apple_dcp_afkep *ep,
+							u32 channel)
+{
+	for (u32 i = 0; i < ep->num_channels; i++)
+		if (ep->services[i].channel == channel)
+			return &ep->services[i];
+
+	return NULL;
+}
+
+static int afk_recv_handle_init(struct apple_dcp_afkep *ep, u32 channel,
+				u8 *payload, size_t payload_size)
 {
 	char name[32];
 	s64 epic_unit = -1;
@@ -259,22 +279,27 @@ static void afk_recv_handle_init(struct apple_dcp_afkep *ep, u32 channel,
 	const char *service_name = name;
 	const char *epic_name = NULL, *epic_class = NULL;
 	const struct apple_epic_service_ops *ops;
+	struct apple_epic_service *service = NULL;
 	struct dcp_parse_ctx ctx;
 	u8 *props = payload + sizeof(name);
 	size_t props_size = payload_size - sizeof(name);
+	int ret;
 
-	WARN_ON(afk_epic_find_service(ep, channel));
+	if (ep->v2)
+		service = afk_epic_find_channel(ep, channel);
+	else
+		WARN_ON(afk_epic_find_service(ep, channel));
 
 	if (payload_size < sizeof(name)) {
 		dev_err(ep->dcp->dev, "AFK[ep:%02x]: payload too small: %lx\n",
 			ep->endpoint, payload_size);
-		return;
+		return -EINVAL;
 	}
 
-	if (ep->num_channels >= AFK_MAX_CHANNEL) {
+	if (!service && ep->num_channels >= AFK_MAX_CHANNEL) {
 		dev_err(ep->dcp->dev, "AFK[ep:%02x]: too many enabled services!\n",
 			ep->endpoint);
-		return;
+		return -ENOSPC;
 	}
 
 	strscpy(name, payload, sizeof(name));
@@ -286,26 +311,31 @@ static void afk_recv_handle_init(struct apple_dcp_afkep *ep, u32 channel,
 	 * use EPICProviderClass to match the service.
 	 */
 	if (props_size > 36) {
-		int ret = parse(props, props_size, &ctx);
+		ret = parse(props, props_size, &ctx);
 		if (ret) {
 			dev_err(ep->dcp->dev,
 				"AFK[ep:%02x]: Failed to parse service init props for %s\n",
 				ep->endpoint, name);
-			return;
+			return ret;
 		}
 		ret = parse_epic_service_init(&ctx, &epic_name, &epic_class, &epic_unit);
-		if (ret) {
+		if (ret && !ep->v2) {
 			dev_err(ep->dcp->dev,
 				"AFK[ep:%02x]: failed to extract init props: %d\n",
 				ep->endpoint, ret);
-			return;
+			return ret;
 		}
-		service_name = epic_class;
+		if (ret) {
+			epic_name = NULL;
+			epic_class = NULL;
+		} else {
+			service_name = epic_class;
+		}
 	} else {
             service_name = name;
         }
 
-	if (ep->match_epic_name)
+	if (ep->match_epic_name && epic_name)
 		ops = afk_match_service(ep, epic_name);
 	else
 		ops = afk_match_service(ep, service_name);
@@ -314,26 +344,32 @@ static void afk_recv_handle_init(struct apple_dcp_afkep *ep, u32 channel,
 		dev_err(ep->dcp->dev,
 			"AFK[ep:%02x]: unable to match service %s on channel %d\n",
 			ep->endpoint, service_name, channel);
+		ret = -ENOENT;
 		goto free;
 	}
 
-	ch_idx = ep->num_channels++;
-	spin_lock_init(&ep->services[ch_idx].lock);
-	ep->services[ch_idx].enabled = true;
-	ep->services[ch_idx].torndown = false;
-	ep->services[ch_idx].ops = ops;
-	ep->services[ch_idx].ep = ep;
-	ep->services[ch_idx].channel = channel;
-	ep->services[ch_idx].cmd_tag = 0;
-	ops->init(&ep->services[ch_idx], epic_name, epic_class, epic_unit);
+	if (!service) {
+		ch_idx = ep->num_channels++;
+		service = &ep->services[ch_idx];
+		spin_lock_init(&service->lock);
+		service->cmd_tag = 0;
+	}
+	service->enabled = true;
+	service->torndown = false;
+	service->ops = ops;
+	service->ep = ep;
+	service->channel = channel;
+	ops->init(service, epic_name, epic_class, epic_unit);
 	dev_info(ep->dcp->dev, "AFK[ep:%02x]: new service %s on channel %d\n",
 		 ep->endpoint, service_name, channel);
 
-	afk_populate_service_debugfs(&ep->services[ch_idx]);
+	afk_populate_service_debugfs(service);
+	ret = 0;
 
 free:
 	kfree(epic_name);
 	kfree(epic_class);
+	return ret;
 }
 
 static void afk_recv_handle_teardown(struct apple_dcp_afkep *ep, u32 channel)
@@ -366,6 +402,41 @@ static void afk_recv_handle_teardown(struct apple_dcp_afkep *ep, u32 channel)
 		ops->teardown(service);
 }
 
+static void afk_complete_cmd(struct apple_dcp_afkep *ep,
+			     struct apple_epic_service *service, u8 idx,
+			     u32 retcode, unsigned long flags)
+	__releases(&service->lock)
+{
+	void *rxbuf, *txbuf;
+	dma_addr_t rxbuf_dma, txbuf_dma;
+	size_t rxlen, txlen;
+
+	service->cmds[idx].done = true;
+	service->cmds[idx].retcode = retcode;
+	if (service->cmds[idx].free_on_ack) {
+		/* defer freeing until we're no longer in atomic context */
+		rxbuf = service->cmds[idx].rxbuf;
+		txbuf = service->cmds[idx].txbuf;
+		rxlen = service->cmds[idx].rxlen;
+		txlen = service->cmds[idx].txlen;
+		rxbuf_dma = service->cmds[idx].rxbuf_dma;
+		txbuf_dma = service->cmds[idx].txbuf_dma;
+		bitmap_release_region(service->cmd_map, idx, 0);
+	} else {
+		rxbuf = txbuf = NULL;
+		rxlen = txlen = 0;
+	}
+	if (service->cmds[idx].completion)
+		complete(service->cmds[idx].completion);
+
+	spin_unlock_irqrestore(&service->lock, flags);
+
+	if (rxbuf && rxlen)
+		dma_free_coherent(ep->dcp->dev, rxlen, rxbuf, rxbuf_dma);
+	if (txbuf && txlen)
+		dma_free_coherent(ep->dcp->dev, txlen, txbuf, txbuf_dma);
+}
+
 static void afk_recv_handle_reply(struct apple_dcp_afkep *ep, u32 channel,
 				  u16 tag, void *payload, size_t payload_size)
 {
@@ -373,9 +444,6 @@ static void afk_recv_handle_reply(struct apple_dcp_afkep *ep, u32 channel,
 	struct apple_epic_service *service;
 	unsigned long flags;
 	u8 idx = tag & 0xff;
-	void *rxbuf, *txbuf;
-	dma_addr_t rxbuf_dma, txbuf_dma;
-	size_t rxlen, txlen;
 
 	service = afk_epic_find_service(ep, channel);
 	if (!service) {
@@ -415,30 +483,7 @@ static void afk_recv_handle_reply(struct apple_dcp_afkep *ep, u32 channel,
 		return;
 	}
 
-	service->cmds[idx].done = true;
-	service->cmds[idx].retcode = le32_to_cpu(cmd->retcode);
-	if (service->cmds[idx].free_on_ack) {
-		/* defer freeing until we're no longer in atomic context */
-		rxbuf = service->cmds[idx].rxbuf;
-		txbuf = service->cmds[idx].txbuf;
-		rxlen = service->cmds[idx].rxlen;
-		txlen = service->cmds[idx].txlen;
-		rxbuf_dma = service->cmds[idx].rxbuf_dma;
-		txbuf_dma = service->cmds[idx].txbuf_dma;
-		bitmap_release_region(service->cmd_map, idx, 0);
-	} else {
-		rxbuf = txbuf = NULL;
-		rxlen = txlen = 0;
-	}
-	if (service->cmds[idx].completion)
-		complete(service->cmds[idx].completion);
-
-	spin_unlock_irqrestore(&service->lock, flags);
-
-	if (rxbuf && rxlen)
-		dma_free_coherent(ep->dcp->dev, rxlen, rxbuf, rxbuf_dma);
-	if (txbuf && txlen)
-		dma_free_coherent(ep->dcp->dev, txlen, txbuf, txbuf_dma);
+	afk_complete_cmd(ep, service, idx, le32_to_cpu(cmd->retcode), flags);
 }
 
 struct epic_std_service_ap_call {
@@ -520,6 +565,430 @@ static void afk_recv_handle_std_service(struct apple_dcp_afkep *ep, u32 channel,
 				   payload_size, true);
 }
 
+static int afk_send_v2_msg(struct apple_dcp_afkep *ep, u16 iid,
+			   enum epic_v2_kind kind, u8 type, u64 tag, u8 flags,
+			   const void *payload, size_t payload_len);
+static int afk_send_v2_internal(struct apple_dcp_afkep *ep, u32 code);
+
+static int afk_v2_iocopy(struct apple_dcp_afkep *ep, u64 dva, void *buf,
+			 size_t size, bool write)
+{
+	struct iommu_domain *domain = iommu_get_domain_for_dev(ep->dcp->dev);
+
+	if (!domain)
+		return -ENODEV;
+
+	while (size) {
+		size_t chunk = min_t(size_t, size, SZ_16K - (dva & (SZ_16K - 1)));
+		phys_addr_t phys = iommu_iova_to_phys(domain, dva);
+		void *p;
+
+		if (!phys) {
+			dev_err(ep->dcp->dev,
+				"AFK[ep:%02x]: failed to translate dva 0x%llx\n",
+				ep->endpoint, dva);
+			return -EFAULT;
+		}
+
+		p = memremap(phys, chunk, MEMREMAP_WB);
+		if (!p)
+			return -ENOMEM;
+
+		if (write)
+			memcpy(p, buf, chunk);
+		else
+			memcpy(buf, p, chunk);
+		memunmap(p);
+
+		dva += chunk;
+		buf += chunk;
+		size -= chunk;
+	}
+
+	return 0;
+}
+
+static void afk_recv_handle_v2_report(struct apple_dcp_afkep *ep, u16 iid,
+				      const struct epic_v2_msg_hdr *mh,
+				      void *payload, size_t payload_size)
+{
+	struct apple_epic_service *service;
+	int ret;
+
+	switch (mh->type) {
+	case EPIC_V2_REPORT_PUBLISH:
+		if (afk_recv_handle_init(ep, iid, payload, payload_size))
+			return;
+
+		ret = afk_send_v2_msg(ep, iid, EPIC_V2_KIND_REPORT,
+				      EPIC_V2_REPORT_OPEN, 0, 1, NULL, 0);
+		if (ret)
+			dev_err(ep->dcp->dev,
+				"AFK[ep:%02x]: failed to open interface %u: %d\n",
+				ep->endpoint, iid, ret);
+		return;
+
+	case EPIC_V2_REPORT_TERMINATE:
+		if (!afk_epic_find_service(ep, iid)) {
+			dev_dbg(ep->dcp->dev,
+				"AFK[ep:%02x]: terminate without service on interface %u\n",
+				ep->endpoint, iid);
+			return;
+		}
+		afk_recv_handle_teardown(ep, iid);
+		return;
+	}
+
+	service = afk_epic_find_service(ep, iid);
+	if (service && !service->torndown && service->ops->report) {
+		service->ops->report(service, mh->type, payload, payload_size);
+		return;
+	}
+
+	dev_dbg(ep->dcp->dev, "AFK[ep:%02x]: ignoring report 0x%x on interface %u\n",
+		ep->endpoint, mh->type, iid);
+}
+
+static void afk_recv_handle_v2_response(struct apple_dcp_afkep *ep, u16 iid,
+					void *payload, size_t payload_size)
+{
+	struct epic_v2_cmd_hdr *rh = payload;
+	struct apple_epic_service *service;
+	struct epic_v2_oob *oob;
+	unsigned long flags;
+	u32 retcode, rsp_len;
+	bool copy = true;
+	int idx;
+
+	service = afk_epic_find_service(ep, iid);
+	if (!service) {
+		dev_warn(ep->dcp->dev,
+			 "AFK[ep:%02x]: command response on disabled interface %u\n",
+			 ep->endpoint, iid);
+		return;
+	}
+
+	if (payload_size < sizeof(*rh)) {
+		dev_err(ep->dcp->dev,
+			"AFK[ep:%02x]: command response on interface %u too small: %zu\n",
+			ep->endpoint, iid, payload_size);
+		return;
+	}
+	payload += sizeof(*rh);
+	payload_size -= sizeof(*rh);
+	retcode = le32_to_cpu(rh->value);
+
+	spin_lock_irqsave(&service->lock, flags);
+	for_each_set_bit(idx, service->cmd_map, MAX_PENDING_CMDS)
+		if (!service->cmds[idx].done && service->cmds[idx].tag == rh->seq)
+			break;
+
+	if (idx >= MAX_PENDING_CMDS) {
+		dev_err(ep->dcp->dev,
+			"AFK[ep:%02x]: command response on interface %u for unknown seq %u\n",
+			ep->endpoint, iid, rh->seq);
+		spin_unlock_irqrestore(&service->lock, flags);
+		return;
+	}
+
+	if (!retcode && (rh->flags & EPIC_V2_CMD_OOB)) {
+		oob = payload;
+		if (payload_size < sizeof(*oob)) {
+			dev_err(ep->dcp->dev,
+				"AFK[ep:%02x]: command response on interface %u has no descriptor\n",
+				ep->endpoint, iid);
+			copy = false;
+		} else {
+			payload += sizeof(*oob);
+			payload_size -= sizeof(*oob);
+			rsp_len = le32_to_cpu(oob->rsp_len);
+			if (rsp_len) {
+				if (le64_to_cpu(oob->rsp_addr) != service->cmds[idx].rxbuf_dma ||
+				    rsp_len > service->cmds[idx].rxlen)
+					dev_err(ep->dcp->dev,
+						"AFK[ep:%02x]: unexpected response buffer 0x%llx (0x%x)\n",
+						ep->endpoint, le64_to_cpu(oob->rsp_addr),
+						rsp_len);
+				copy = false;
+			}
+		}
+	}
+
+	if (!retcode && copy && payload_size) {
+		if (payload_size > service->cmds[idx].rxlen)
+			dev_err(ep->dcp->dev,
+				"AFK[ep:%02x]: command response on interface %u too large: 0x%zx > 0x%zx\n",
+				ep->endpoint, iid, payload_size,
+				service->cmds[idx].rxlen);
+		else
+			memcpy(service->cmds[idx].rxbuf, payload, payload_size);
+	}
+
+	afk_complete_cmd(ep, service, idx, retcode, flags);
+}
+
+static void afk_recv_handle_v2_command(struct apple_dcp_afkep *ep, u16 iid,
+				       const struct epic_v2_msg_hdr *mh,
+				       void *payload, size_t payload_size)
+{
+	struct apple_epic_service *service = afk_epic_find_service(ep, iid);
+	struct epic_v2_cmd_hdr *ch = payload, *rh;
+	struct epic_v2_oob *oob = NULL, *roob;
+	struct epic_service_call *call;
+	void *data, *cmd_data = NULL, *rsp, *reply;
+	size_t data_size, call_size = 0, reply_size = 0, rsp_size;
+	u32 cmd_len, rsp_len;
+	int ret;
+
+	if (!service || service->torndown) {
+		dev_warn(ep->dcp->dev,
+			 "AFK[ep:%02x]: command 0x%x on disabled interface %u\n",
+			 ep->endpoint, mh->type, iid);
+		return;
+	}
+
+	if (payload_size < sizeof(*ch)) {
+		dev_err(ep->dcp->dev,
+			"AFK[ep:%02x]: command on interface %u too small: %zu\n",
+			ep->endpoint, iid, payload_size);
+		return;
+	}
+
+	data = payload + sizeof(*ch);
+	data_size = payload_size - sizeof(*ch);
+
+	if (ch->flags & EPIC_V2_CMD_OOB) {
+		if (data_size < sizeof(*oob)) {
+			dev_err(ep->dcp->dev,
+				"AFK[ep:%02x]: command on interface %u has no descriptor\n",
+				ep->endpoint, iid);
+			return;
+		}
+		oob = data;
+		data += sizeof(*oob);
+		data_size -= sizeof(*oob);
+
+		cmd_len = le32_to_cpu(oob->cmd_len);
+		if (cmd_len) {
+			if (cmd_len > EPIC_V2_MAX_LENGTH)
+				return;
+			cmd_data = kvzalloc(cmd_len, GFP_KERNEL);
+			if (!cmd_data)
+				return;
+			ret = afk_v2_iocopy(ep, le64_to_cpu(oob->cmd_addr),
+					    cmd_data, cmd_len, false);
+			if (ret)
+				goto out;
+			data = cmd_data;
+			data_size = cmd_len;
+		}
+	}
+
+	call = data;
+	if (mh->type == EPIC_SUBTYPE_STD_SERVICE && service->ops->call &&
+	    data_size >= sizeof(*call) &&
+	    le32_to_cpu(call->magic) == EPIC_SERVICE_CALL_MAGIC &&
+	    data_size - sizeof(*call) >= le32_to_cpu(call->data_len)) {
+		call_size = le32_to_cpu(call->data_len);
+		reply_size = sizeof(*call) + call_size;
+	} else {
+		dev_warn(ep->dcp->dev,
+			 "AFK[ep:%02x]: unhandled command 0x%x on interface %u\n",
+			 ep->endpoint, mh->type, iid);
+	}
+
+	rsp_size = sizeof(*ch) + (oob ? sizeof(*oob) : 0);
+	rsp = kzalloc(rsp_size + reply_size, GFP_KERNEL);
+	if (!rsp)
+		goto out;
+	reply = rsp + rsp_size;
+
+	if (reply_size) {
+		ret = service->ops->call(service, le32_to_cpu(call->command),
+					 data + sizeof(*call), call_size,
+					 reply + sizeof(*call), call_size);
+		if (ret)
+			goto out_free_rsp;
+		memcpy(reply, call, sizeof(*call));
+	}
+
+	rh = rsp;
+	rh->flags = ch->flags;
+	rh->seq = ch->seq;
+	rh->value = cpu_to_le32(0);
+
+	if (oob) {
+		roob = rsp + sizeof(*rh);
+		*roob = *oob;
+		rsp_len = le32_to_cpu(oob->rsp_len);
+		if (le64_to_cpu(oob->rsp_addr) && rsp_len) {
+			reply_size = min_t(size_t, reply_size, rsp_len);
+			ret = afk_v2_iocopy(ep, le64_to_cpu(oob->rsp_addr),
+					    reply, reply_size, true);
+			if (ret)
+				goto out_free_rsp;
+			roob->rsp_len = cpu_to_le32(reply_size);
+			reply_size = 0;
+		} else {
+			roob->rsp_len = cpu_to_le32(0);
+		}
+	}
+
+	ret = afk_send_v2_msg(ep, iid, EPIC_V2_KIND_RESPONSE, mh->type,
+			      le64_to_cpu(mh->tag), 0, rsp, rsp_size + reply_size);
+	if (ret)
+		dev_err(ep->dcp->dev,
+			"AFK[ep:%02x]: failed to answer command 0x%x on interface %u: %d\n",
+			ep->endpoint, mh->type, iid, ret);
+
+out_free_rsp:
+	kfree(rsp);
+out:
+	kvfree(cmd_data);
+}
+
+static void afk_recv_handle_v2_internal(struct apple_dcp_afkep *ep,
+					const u8 *payload, size_t payload_size)
+{
+	u32 code;
+
+	if (payload_size < sizeof(code)) {
+		dev_err(ep->dcp->dev, "AFK[ep:%02x]: internal packet too small: %zu\n",
+			ep->endpoint, payload_size);
+		return;
+	}
+
+	code = get_unaligned_le32(payload);
+	dev_dbg(ep->dcp->dev, "AFK[ep:%02x]: internal packet %u\n",
+		ep->endpoint, code);
+
+	if (code == EPIC_V2_INTERNAL_RESUME)
+		afk_send_v2_internal(ep, EPIC_V2_INTERNAL_RESUME_DONE);
+	else if (code == EPIC_V2_INTERNAL_PAUSE)
+		afk_send_v2_internal(ep, EPIC_V2_INTERNAL_PAUSE_DONE);
+}
+
+static int afk_v2_frag(struct apple_dcp_afkep *ep, u16 iid, u32 total,
+		       const u8 *data, size_t size, u8 **out)
+{
+	struct afk_v2_frag *frag = NULL;
+	int i;
+
+	for (i = 0; i < AFK_MAX_CHANNEL; i++) {
+		if (ep->frag[i].active && ep->frag[i].iid == iid) {
+			frag = &ep->frag[i];
+			break;
+		}
+	}
+
+	if (!frag) {
+		if (total > EPIC_V2_MAX_LENGTH) {
+			dev_err(ep->dcp->dev,
+				"AFK[ep:%02x]: message on interface %u too large: 0x%x\n",
+				ep->endpoint, iid, total);
+			return -EMSGSIZE;
+		}
+
+		for (i = 0; i < AFK_MAX_CHANNEL; i++) {
+			if (!ep->frag[i].active) {
+				frag = &ep->frag[i];
+				break;
+			}
+		}
+		if (!frag) {
+			dev_err(ep->dcp->dev,
+				"AFK[ep:%02x]: out of fragment slots for interface %u\n",
+				ep->endpoint, iid);
+			return -ENOSPC;
+		}
+
+		frag->buf = kvzalloc(max(total, 1U), GFP_KERNEL);
+		if (!frag->buf)
+			return -ENOMEM;
+		frag->active = true;
+		frag->iid = iid;
+		frag->len = 0;
+		frag->total = total;
+	}
+
+	size = min(size, frag->total - frag->len);
+	memcpy(frag->buf + frag->len, data, size);
+	frag->len += size;
+
+	if (frag->len < frag->total)
+		return 0;
+
+	*out = frag->buf;
+	frag->buf = NULL;
+	frag->active = false;
+
+	return 1;
+}
+
+static void afk_recv_handle_v2(struct apple_dcp_afkep *ep, u8 *data,
+			       size_t data_size)
+{
+	struct epic_v2_hdr *hdr = (struct epic_v2_hdr *)data;
+	struct epic_v2_msg_hdr *mh;
+	u8 *body, *buf = NULL;
+	size_t size;
+	u32 length;
+	u16 iid;
+
+	if (data_size < sizeof(*hdr)) {
+		dev_err(ep->dcp->dev, "AFK[ep:%02x]: payload too small: %zx\n",
+			ep->endpoint, data_size);
+		return;
+	}
+
+	iid = le16_to_cpu(hdr->iid);
+	length = le32_to_cpu(hdr->length);
+	body = data + sizeof(*hdr);
+	size = data_size - sizeof(*hdr);
+
+	if (size != length) {
+		if (afk_v2_frag(ep, iid, length, body, size, &buf) <= 0)
+			return;
+		body = buf;
+		size = length;
+	}
+
+	if (!iid) {
+		afk_recv_handle_v2_internal(ep, body, size);
+		goto out;
+	}
+
+	if (size < sizeof(*mh)) {
+		dev_err(ep->dcp->dev,
+			"AFK[ep:%02x]: message on interface %u too small: %zu\n",
+			ep->endpoint, iid, size);
+		goto out;
+	}
+
+	mh = (struct epic_v2_msg_hdr *)body;
+	body += sizeof(*mh);
+	size -= sizeof(*mh);
+
+	switch (mh->kind) {
+	case EPIC_V2_KIND_REPORT:
+		afk_recv_handle_v2_report(ep, iid, mh, body, size);
+		break;
+	case EPIC_V2_KIND_COMMAND:
+		afk_recv_handle_v2_command(ep, iid, mh, body, size);
+		break;
+	case EPIC_V2_KIND_RESPONSE:
+		afk_recv_handle_v2_response(ep, iid, body, size);
+		break;
+	default:
+		dev_warn(ep->dcp->dev,
+			 "AFK[ep:%02x]: unknown message kind %u on interface %u\n",
+			 ep->endpoint, mh->kind, iid);
+	}
+
+out:
+	kvfree(buf);
+}
+
 static void afk_recv_handle(struct apple_dcp_afkep *ep, u32 channel, u32 type,
 			    u8 *data, size_t data_size)
 {
@@ -530,6 +999,20 @@ static void afk_recv_handle(struct apple_dcp_afkep *ep, u32 channel, u32 type,
 	u16 subtype = le16_to_cpu(eshdr->type);
 	u8 *payload = data + sizeof(*ehdr) + sizeof(*eshdr);
 	size_t payload_size;
+
+	if (!ep->framing_known) {
+		struct epic_v2_hdr *v2 = (struct epic_v2_hdr *)data;
+
+		ep->v2 = !channel && !type &&
+			 data_size >= sizeof(*v2) + sizeof(struct epic_v2_msg_hdr) &&
+			 le32_to_cpu(v2->length) == data_size - sizeof(*v2);
+		ep->framing_known = true;
+		dev_dbg(ep->dcp->dev, "AFK[ep:%02x]: %s framing\n", ep->endpoint,
+			ep->v2 ? "v2" : "v1");
+	}
+
+	if (ep->v2)
+		return afk_recv_handle_v2(ep, data, data_size);
 
 	if (data_size < sizeof(*ehdr) + sizeof(*eshdr)) {
 		dev_err(ep->dcp->dev, "AFK[ep:%02x]: payload too small: %lx\n",
@@ -568,7 +1051,8 @@ static void afk_recv_handle(struct apple_dcp_afkep *ep, u32 channel, u32 type,
 			return;
 		}
 
-		return afk_recv_handle_init(ep, channel, payload, payload_size);
+		afk_recv_handle_init(ep, channel, payload, payload_size);
+		return;
 	}
 
 	if (!service) {
@@ -752,25 +1236,21 @@ int afk_receive_message(struct apple_dcp_afkep *ep, u64 message)
 	return 0;
 }
 
-int afk_send_epic(struct apple_dcp_afkep *ep, u32 channel, u16 tag,
-		  enum epic_type etype, enum epic_category ecat, u8 stype,
-		  const void *payload, size_t payload_len)
+static int afk_send_qe(struct apple_dcp_afkep *ep, u32 channel, u32 etype,
+		       const void *epic_hdr, size_t epic_hdr_len,
+		       const void *payload, size_t payload_len)
 {
 	u32 rptr, wptr;
 	struct afk_qe *hdr, *hdr2;
-	struct epic_hdr *ehdr;
-	struct epic_sub_hdr *eshdr;
-	unsigned long flags;
 	size_t total_epic_size, total_size;
-	int ret;
 
-	spin_lock_irqsave(&ep->lock, flags);
+	lockdep_assert_held(&ep->lock);
 
 	dma_rmb();
 	rptr = le32_to_cpu(*afk_rb_rptr(&ep->txbfr));
 	wptr = le32_to_cpu(*afk_rb_wptr(&ep->txbfr));
 	trace_afk_send_rwptr_pre(ep, rptr, wptr);
-	total_epic_size = sizeof(*ehdr) + sizeof(*eshdr) + payload_len;
+	total_epic_size = epic_hdr_len + payload_len;
 	total_size = sizeof(*hdr) + total_epic_size;
 
 	hdr = hdr2 = NULL;
@@ -796,19 +1276,15 @@ int afk_send_epic(struct apple_dcp_afkep *ep, u32 channel, u16 tag,
 		 * If wptr < rptr we can't wrap around and only have to make
 		 * sure that there's enough space for the entire payload.
 		 */
-		if (wptr + total_size > rptr) {
-			ret = -ENOMEM;
-			goto out;
-		}
+		if (wptr + total_size > rptr)
+			return -ENOMEM;
 
 		hdr = ep->txbfr.buf + wptr;
 		wptr += sizeof(*hdr);
 	} else {
 		/* We need enough space to place at least a queue entry */
-		if (wptr + sizeof(*hdr) > ep->txbfr.bufsz) {
-			ret = -ENOMEM;
-			goto out;
-		}
+		if (wptr + sizeof(*hdr) > ep->txbfr.bufsz)
+			return -ENOMEM;
 
 		/*
 		 * If we can place a single queue entry but not the full payload
@@ -821,10 +1297,8 @@ int afk_send_epic(struct apple_dcp_afkep *ep, u32 channel, u16 tag,
 			 * Ensure there's space for the  queue entry at the
 			 * beginning
 			 */
-			if (sizeof(*hdr) > rptr) {
-				ret = -ENOMEM;
-				goto out;
-			}
+			if (sizeof(*hdr) > rptr)
+				return -ENOMEM;
 
 			/*
 			 * Place two queue entries to indicate we want to wrap
@@ -835,10 +1309,8 @@ int afk_send_epic(struct apple_dcp_afkep *ep, u32 channel, u16 tag,
 			wptr = sizeof(*hdr);
 
 			/* Ensure there's enough space for the entire payload */
-			if (wptr + total_epic_size > rptr) {
-				ret = -ENOMEM;
-				goto out;
-			}
+			if (wptr + total_epic_size > rptr)
+				return -ENOMEM;
 		} else {
 			/* We have enough space to place the entire payload */
 			hdr = ep->txbfr.buf + wptr;
@@ -858,28 +1330,11 @@ int afk_send_epic(struct apple_dcp_afkep *ep, u32 channel, u16 tag,
 	if (hdr2)
 		memcpy(hdr2, hdr, sizeof(*hdr));
 
-	ehdr = ep->txbfr.buf + wptr;
-	memset(ehdr, 0, sizeof(*ehdr));
-	ehdr->version = 2;
-	ehdr->seq = cpu_to_le16(ep->qe_seq++);
-	ehdr->timestamp = cpu_to_le64(0);
-	wptr += sizeof(*ehdr);
+	memcpy(ep->txbfr.buf + wptr, epic_hdr, epic_hdr_len);
+	wptr += epic_hdr_len;
 
-	eshdr = ep->txbfr.buf + wptr;
-	memset(eshdr, 0, sizeof(*eshdr));
-	eshdr->length = cpu_to_le32(payload_len);
-	eshdr->version = 4;
-	eshdr->category = ecat;
-	eshdr->type = cpu_to_le16(stype);
-	eshdr->timestamp = cpu_to_le64(0);
-	eshdr->tag = cpu_to_le16(tag);
-	if (ecat == EPIC_CAT_REPLY)
-		eshdr->inline_len = cpu_to_le32(payload_len - 4);
-	else
-		eshdr->inline_len = cpu_to_le32(0);
-	wptr += sizeof(*eshdr);
-
-	memcpy(ep->txbfr.buf + wptr, payload, payload_len);
+	if (payload_len)
+		memcpy(ep->txbfr.buf + wptr, payload, payload_len);
 	wptr += payload_len;
 	wptr = roundup(wptr, ep->txbfr.blksz);
 	if (wptr == ep->txbfr.bufsz)
@@ -889,11 +1344,124 @@ int afk_send_epic(struct apple_dcp_afkep *ep, u32 channel, u16 tag,
 	*afk_rb_wptr(&ep->txbfr) = cpu_to_le32(wptr);
 	afk_send(ep, FIELD_PREP(RBEP_TYPE, RBEP_SEND) |
 			     FIELD_PREP(SEND_WPTR, wptr));
-	ret = 0;
 
-out:
+	return 0;
+}
+
+int afk_send_epic(struct apple_dcp_afkep *ep, u32 channel, u16 tag,
+		  enum epic_type etype, enum epic_category ecat, u8 stype,
+		  const void *payload, size_t payload_len)
+{
+	struct {
+		struct epic_hdr ehdr;
+		struct epic_sub_hdr eshdr;
+	} __packed hdr;
+	unsigned long flags;
+	int ret;
+
+	memset(&hdr, 0, sizeof(hdr));
+	hdr.ehdr.version = 2;
+	hdr.ehdr.timestamp = cpu_to_le64(0);
+
+	hdr.eshdr.length = cpu_to_le32(payload_len);
+	hdr.eshdr.version = 4;
+	hdr.eshdr.category = ecat;
+	hdr.eshdr.type = cpu_to_le16(stype);
+	hdr.eshdr.timestamp = cpu_to_le64(0);
+	hdr.eshdr.tag = cpu_to_le16(tag);
+	if (ecat == EPIC_CAT_REPLY)
+		hdr.eshdr.inline_len = cpu_to_le32(payload_len - 4);
+	else
+		hdr.eshdr.inline_len = cpu_to_le32(0);
+
+	spin_lock_irqsave(&ep->lock, flags);
+	hdr.ehdr.seq = cpu_to_le16(ep->qe_seq);
+	ret = afk_send_qe(ep, channel, etype, &hdr, sizeof(hdr), payload,
+			  payload_len);
+	if (!ret)
+		ep->qe_seq++;
 	spin_unlock_irqrestore(&ep->lock, flags);
+
 	return ret;
+}
+
+static int afk_send_v2(struct apple_dcp_afkep *ep, u16 iid,
+		       const struct epic_v2_msg_hdr *mh,
+		       const void *payload, size_t payload_len)
+{
+	struct {
+		struct epic_v2_hdr hdr;
+		struct epic_v2_msg_hdr mh;
+	} __packed hdr;
+	size_t hdr_len = sizeof(hdr.hdr) + (mh ? sizeof(*mh) : 0);
+	size_t length = hdr_len - sizeof(hdr.hdr) + payload_len;
+	unsigned long flags;
+	int ret;
+
+	if (length > EPIC_V2_SPLIT) {
+		dev_err(ep->dcp->dev,
+			"AFK[ep:%02x]: message on interface %u too large: 0x%zx\n",
+			ep->endpoint, iid, length);
+		return -EMSGSIZE;
+	}
+
+	memset(&hdr, 0, sizeof(hdr));
+	hdr.hdr.iid = cpu_to_le16(iid);
+	hdr.hdr.length = cpu_to_le32(length);
+	if (mh)
+		hdr.mh = *mh;
+
+	spin_lock_irqsave(&ep->lock, flags);
+	hdr.hdr.seq = ep->qe_seq & 0xff;
+	ret = afk_send_qe(ep, 0, 0, &hdr, hdr_len, payload, payload_len);
+	if (!ret)
+		ep->qe_seq++;
+	spin_unlock_irqrestore(&ep->lock, flags);
+
+	return ret;
+}
+
+static int afk_send_v2_msg(struct apple_dcp_afkep *ep, u16 iid,
+			   enum epic_v2_kind kind, u8 type, u64 tag, u8 flags,
+			   const void *payload, size_t payload_len)
+{
+	struct epic_v2_msg_hdr mh;
+
+	memset(&mh, 0, sizeof(mh));
+	mh.tag = cpu_to_le64(tag);
+	mh.type = type;
+	mh.kind = kind;
+	mh.flags = flags;
+
+	return afk_send_v2(ep, iid, &mh, payload, payload_len);
+}
+
+static int afk_send_v2_internal(struct apple_dcp_afkep *ep, u32 code)
+{
+	__le32 payload = cpu_to_le32(code);
+
+	return afk_send_v2(ep, 0, NULL, &payload, sizeof(payload));
+}
+
+static int afk_send_v2_command(struct apple_epic_service *service, u8 seq,
+			       u8 type, dma_addr_t txbuf_dma, size_t txlen,
+			       size_t rxlen)
+{
+	struct {
+		struct epic_v2_cmd_hdr hdr;
+		struct epic_v2_oob oob;
+	} __packed cmd;
+
+	memset(&cmd, 0, sizeof(cmd));
+	cmd.hdr.flags = EPIC_V2_CMD_OOB;
+	cmd.hdr.seq = seq;
+	cmd.hdr.value = cpu_to_le32(rxlen);
+	cmd.oob.cmd_addr = cpu_to_le64(txlen ? txbuf_dma : 0);
+	cmd.oob.cmd_len = cpu_to_le32(txlen);
+
+	return afk_send_v2_msg(service->ep, service->channel,
+			       EPIC_V2_KIND_COMMAND, type, seq, 0, &cmd,
+			       sizeof(cmd));
 }
 
 int afk_send_command(struct apple_epic_service *service, u8 type,
@@ -936,8 +1504,12 @@ int afk_send_command(struct apple_epic_service *service, u8 type,
 		goto err_unlock;
 	}
 
-	tag = (service->cmd_tag & 0xff) << 8;
-	tag |= idx & 0xff;
+	if (ep->v2) {
+		tag = service->cmd_tag;
+	} else {
+		tag = (service->cmd_tag & 0xff) << 8;
+		tag |= idx & 0xff;
+	}
 	service->cmd_tag++;
 
 	service->cmds[idx].tag = tag;
@@ -954,9 +1526,13 @@ int afk_send_command(struct apple_epic_service *service, u8 type,
 
 	spin_unlock_irqrestore(&service->lock, flags);
 
-	ret = afk_send_epic(service->ep, service->channel, tag,
-			    EPIC_TYPE_COMMAND, EPIC_CAT_COMMAND, type, &cmd,
-			    sizeof(cmd));
+	if (ep->v2)
+		ret = afk_send_v2_command(service, tag, type, txbuf_dma,
+					  payload_len, output_len);
+	else
+		ret = afk_send_epic(service->ep, service->channel, tag,
+				    EPIC_TYPE_COMMAND, EPIC_CAT_COMMAND, type,
+				    &cmd, sizeof(cmd));
 	if (ret)
 		goto err_free_cmd;
 
