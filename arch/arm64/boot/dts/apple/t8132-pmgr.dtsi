@@ -45,6 +45,7 @@
 		#power-domain-cells = <0>;
 		#reset-cells = <0>;
 		label = "pmc";
+		apple,always-on; /* the DCP firmware needs it to change display perf states */
 	};
 
 	ps_pms_fpwm0: power-controller@140 {
