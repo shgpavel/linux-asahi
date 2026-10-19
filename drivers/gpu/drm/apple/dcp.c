@@ -6,6 +6,7 @@
 #include <linux/clk.h>
 #include <linux/completion.h>
 #include <linux/component.h>
+#include <linux/debugfs.h>
 #include <linux/delay.h>
 #include <linux/dma-mapping.h>
 #include <linux/gpio/consumer.h>
@@ -476,10 +477,43 @@ static irqreturn_t dcp_dp2hdmi_hpd(int irq, void *data)
 		dcp_dptx_connect(dcp, 0);
 		if (dcp->fw_compat == DCP_FIRMWARE_V_27_0)
 			iboot_hpd_changed(dcp);
+	} else if (dcp->fw_compat == DCP_FIRMWARE_V_27_0) {
+		msleep(2000);
+		if (!gpiod_get_value_cansleep(dcp->hdmi_hpd)) {
+			iboot_unplugged(dcp);
+			dcp_dptx_disconnect(dcp, 0);
+		}
 	}
 
 	return IRQ_HANDLED;
 }
+
+static ssize_t dcp_hpd_sim_write(struct file *file, const char __user *ubuf,
+				 size_t count, loff_t *ppos)
+{
+	struct apple_dcp *dcp = file->private_data;
+	bool connected;
+	int ret;
+
+	ret = kstrtobool_from_user(ubuf, count, &connected);
+	if (ret)
+		return ret;
+
+	dev_info(dcp->dev, "simulated HPD, connected:%d\n", connected);
+	if (connected) {
+		dcp_dptx_connect(dcp, 0);
+		iboot_hpd_changed(dcp);
+	} else {
+		iboot_unplugged(dcp);
+		dcp_dptx_disconnect(dcp, 0);
+	}
+	return count;
+}
+
+static const struct file_operations dcp_hpd_sim_fops = {
+	.open = simple_open,
+	.write = dcp_hpd_sim_write,
+};
 
 void dcp_link(struct platform_device *pdev, struct apple_crtc *crtc,
 	      struct apple_connector *connector)
@@ -1257,6 +1291,7 @@ static int dcp_platform_probe(struct platform_device *pdev)
 	if (fw_compat == DCP_FIRMWARE_V_27_0) {
 		bitmap_zero(dcp->iomfb_surfaces, DCP_MAX_PLANES);
 		set_bit(0, dcp->iomfb_surfaces);
+		debugfs_create_file("dcp_hpd_sim", 0200, NULL, dcp, &dcp_hpd_sim_fops);
 	}
 
 	if (dcp->phy) {

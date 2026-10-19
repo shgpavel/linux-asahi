@@ -30,6 +30,7 @@ struct iboot_color_mode {
 
 int iboot_start(struct apple_dcp *dcp);
 void iboot_hpd_changed(struct apple_dcp *dcp);
+void iboot_unplugged(struct apple_dcp *dcp);
 int iboot_modeset(struct apple_dcp *dcp, struct drm_crtc_state *crtc_state);
 void iboot_flush(struct apple_dcp *dcp, struct drm_crtc *crtc,
 		 struct drm_atomic_commit *commit);

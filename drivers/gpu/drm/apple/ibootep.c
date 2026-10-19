@@ -2,6 +2,7 @@
 /* Copyright 2023 */
 
 #include <linux/completion.h>
+#include <linux/delay.h>
 #include <linux/slab.h>
 #include <linux/workqueue.h>
 
@@ -22,6 +23,7 @@
 #define IBOOT_RXBUF_LEN 0x4000
 #define IBOOT_HPD_POLL_MS 250
 #define IBOOT_HPD_TRIES 40
+#define IBOOT_SET_MODE_TRIES 5
 
 enum iboot_op {
 	IBOOT_SET_SURFACE = 1,
@@ -293,6 +295,18 @@ void iboot_hpd_changed(struct apple_dcp *dcp)
 	mod_delayed_work(system_dfl_wq, &dcp->iboot_hpd_work, 0);
 }
 
+void iboot_unplugged(struct apple_dcp *dcp)
+{
+	cancel_delayed_work_sync(&dcp->iboot_hpd_work);
+	dcp->valid_mode = false;
+	dcp->nr_modes = 0;
+	dev_info(dcp->dev, "iboot: display unplugged\n");
+	if (dcp->connector && dcp->connector->connected) {
+		dcp->connector->connected = false;
+		schedule_work(&dcp->connector->hotplug_wq);
+	}
+}
+
 int iboot_start(struct apple_dcp *dcp)
 {
 	int ret;
@@ -317,7 +331,7 @@ int iboot_modeset(struct apple_dcp *dcp, struct drm_crtc_state *crtc_state)
 {
 	struct iboot_set_mode_cmd cmd;
 	struct dcp_display_mode *mode;
-	int ret;
+	int i, ret = 0;
 
 	mode = lookup_mode(dcp, &crtc_state->mode);
 	if (!mode || mode->timing_mode_id >= dcp->iboot_nr_tmodes) {
@@ -329,9 +343,12 @@ int iboot_modeset(struct apple_dcp *dcp, struct drm_crtc_state *crtc_state)
 	cmd.tmode = dcp->iboot_tmodes[mode->timing_mode_id];
 	cmd.cmode = dcp->iboot_cmode;
 
-	ret = iboot_cmd(dcp, IBOOT_SET_MODE, &cmd, sizeof(cmd), NULL, 0);
-	if (ret)
+	for (i = 0; i < IBOOT_SET_MODE_TRIES; i++) {
 		ret = iboot_cmd(dcp, IBOOT_SET_MODE, &cmd, sizeof(cmd), NULL, 0);
+		if (!ret)
+			break;
+		msleep(200);
+	}
 	if (ret)
 		return ret;
 
