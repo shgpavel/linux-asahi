@@ -287,7 +287,7 @@ static int dcp_rtk_shmem_setup(void *cookie, struct apple_rtkit_shmem *bfr)
 			return -ENOMEM;
 
 		bfr->is_mapped = true;
-		dev_info(dcp->dev,
+		dev_dbg(dcp->dev,
 			 "shmem_setup: iova: %lx -> pa: %lx -> iomem: %lx\n",
 			 (uintptr_t)bfr->iova, (uintptr_t)phy_addr,
 			 (uintptr_t)bfr->buffer);
@@ -297,7 +297,7 @@ static int dcp_rtk_shmem_setup(void *cookie, struct apple_rtkit_shmem *bfr)
 		if (!bfr->buffer)
 			return -ENOMEM;
 
-		dev_info(dcp->dev, "shmem_setup: iova: %lx, buffer: %lx\n",
+		dev_dbg(dcp->dev, "shmem_setup: iova: %lx, buffer: %lx\n",
 			 (uintptr_t)bfr->iova, (uintptr_t)bfr->buffer);
 	}
 
@@ -366,7 +366,7 @@ static int dcp_dptx_connect(struct apple_dcp *dcp, u32 port)
 		dev_warn(dcp->dev, "dcp_dptx_connect: missing phy\n");
 		return -ENODEV;
 	}
-	dev_info(dcp->dev, "%s(port=%d)\n", __func__, port);
+	dev_dbg(dcp->dev, "%s(port=%d)\n", __func__, port);
 
 	mutex_lock(&dcp->hpd_mutex);
 	if (!dcp->dptxport[port].enabled) {
@@ -421,7 +421,7 @@ static void disconnected_hpd_event(struct apple_connector *con)
 
 static int dcp_dptx_disconnect(struct apple_dcp *dcp, u32 port)
 {
-	dev_info(dcp->dev, "%s(port=%d)\n", __func__, port);
+	dev_dbg(dcp->dev, "%s(port=%d)\n", __func__, port);
 
 	mutex_lock(&dcp->hpd_mutex);
 	if (dcp->dptxport[port].enabled && dcp->dptxport[port].connected) {
@@ -465,12 +465,12 @@ static irqreturn_t dcp_dp2hdmi_hpd(int irq, void *data)
 	 * The interrupt should be changed to rising but for now the disconnect
 	 * IRQs might be helpful for debugging.
 	 */
-	dev_info(dcp->dev, "DP2HDMI HPD irq, connected:%d\n", connected);
+	dev_dbg(dcp->dev, "DP2HDMI HPD irq, connected:%d\n", connected);
 
 	if (connected) {
 		msleep(500);
 		connected = gpiod_get_value_cansleep(dcp->hdmi_hpd);
-		dev_info(dcp->dev, "DP2HDMI HPD irq, 500ms debounce: connected:%d\n", connected);
+		dev_dbg(dcp->dev, "DP2HDMI HPD irq, 500ms debounce: connected:%d\n", connected);
 	}
 
 	if (connected) {
@@ -585,7 +585,7 @@ int dcp_start(struct platform_device *pdev)
 			usleep_range(10 * USEC_PER_MSEC, 25 * USEC_PER_MSEC);
 
 			connected = gpiod_get_value_cansleep(dcp->hdmi_hpd);
-			dev_info(dcp->dev, "%s: DP2HDMI HPD connected:%d\n", __func__, connected);
+			dev_dbg(dcp->dev, "%s: DP2HDMI HPD connected:%d\n", __func__, connected);
 
 			// necessary on j473/j474 but not on j314c
 			if (connected)
@@ -644,7 +644,7 @@ static int dcp_enable_dp2hdmi_hpd(struct apple_dcp *dcp)
 	// check HPD state before enabling the edge triggered IRQ
 	if (dcp->hdmi_hpd) {
 		bool connected = gpiod_get_value_cansleep(dcp->hdmi_hpd);
-		dev_info(dcp->dev, "%s: DP2HDMI HPD connected:%d\n", __func__, connected);
+		dev_dbg(dcp->dev, "%s: DP2HDMI HPD connected:%d\n", __func__, connected);
 
 		if (connected) {
 			dcp_dptx_connect(dcp, 0);
@@ -712,7 +712,7 @@ void dcp_poweron(struct platform_device *pdev)
 
 	if (dcp->hdmi_hpd) {
 		bool connected = gpiod_get_value_cansleep(dcp->hdmi_hpd);
-		dev_info(dcp->dev, "%s: DP2HDMI HPD connected:%d\n", __func__, connected);
+		dev_dbg(dcp->dev, "%s: DP2HDMI HPD connected:%d\n", __func__, connected);
 
 		if (connected)
 			dcp_dptx_connect(dcp, 0);

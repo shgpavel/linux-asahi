@@ -259,7 +259,7 @@ dptxport_call_set_drive_settings(struct apple_epic_service *service,
 	*reply = *request;
 	reply->retcode = cpu_to_le32(0);
 
-	dev_info(service->ep->dcp->dev, "set_drive_settings: %d:%d:%d:%d:%d:%d:%d\n",
+	dev_dbg(service->ep->dcp->dev, "set_drive_settings: %d:%d:%d:%d:%d:%d:%d\n",
 		 request->unk1, request->unk2, request->unk3, request->unk4,
 		 request->unk5, request->unk6, request->unk7);
 

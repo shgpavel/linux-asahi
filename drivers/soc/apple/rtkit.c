@@ -481,7 +481,7 @@ static void apple_rtkit_syslog_rx_log(struct apple_rtkit *rtk, u64 msg)
 		msglen--;
 
 	rtk->syslog_msg_buffer[msglen] = 0;
-	dev_info(rtk->dev, "RTKit: syslog message: %s: %s\n", log_context,
+	dev_dbg(rtk->dev, "RTKit: syslog message: %s: %s\n", log_context,
 		 rtk->syslog_msg_buffer);
 
 done:
@@ -521,6 +521,8 @@ static void apple_rtkit_oslog_rx(struct apple_rtkit *rtk, u64 msg)
 	case APPLE_RTKIT_OSLOG_NOTIFY:
 		apple_rtkit_send_message(rtk, APPLE_RTKIT_EP_OSLOG, msg, NULL,
 					 false);
+		break;
+	case 3 ... 5:
 		break;
 	default:
 		dev_warn(rtk->dev, "RTKit: Unknown oslog message: %llx\n",

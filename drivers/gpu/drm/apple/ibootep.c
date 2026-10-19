@@ -282,7 +282,7 @@ static void iboot_hpd_work(struct work_struct *work)
 		return;
 	}
 
-	dev_info(dcp->dev, "iboot: %d display modes\n", ret);
+	dev_dbg(dcp->dev, "iboot: %d display modes\n", ret);
 	if (ret > 0 && dcp->connector) {
 		dcp->connector->connected = true;
 		schedule_work(&dcp->connector->hotplug_wq);
@@ -300,7 +300,7 @@ void iboot_unplugged(struct apple_dcp *dcp)
 	cancel_delayed_work_sync(&dcp->iboot_hpd_work);
 	dcp->valid_mode = false;
 	dcp->nr_modes = 0;
-	dev_info(dcp->dev, "iboot: display unplugged\n");
+	dev_dbg(dcp->dev, "iboot: display unplugged\n");
 	if (dcp->connector && dcp->connector->connected) {
 		dcp->connector->connected = false;
 		schedule_work(&dcp->connector->hotplug_wq);
