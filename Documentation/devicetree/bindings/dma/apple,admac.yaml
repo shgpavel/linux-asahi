@@ -37,6 +37,7 @@ properties:
           - enum:
               - apple,t6030-admac
               - apple,t6031-admac
+              - apple,t8132-admac
           - const: apple,t8122-admac
       - const: apple,t8122-admac
 
