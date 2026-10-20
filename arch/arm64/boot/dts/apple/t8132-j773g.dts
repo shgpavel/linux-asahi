@@ -139,3 +139,37 @@
 		label = "CPU Max Temperature";
 	};
 };
+
+&admac {
+	status = "okay";
+};
+
+&i2c1 {
+	status = "okay";
+
+	jack_codec: codec@4b {
+		compatible = "cirrus,cs42l84";
+		reg = <0x4b>;
+		reset-gpios = <&pinctrl_nub 17 GPIO_ACTIVE_HIGH>;
+		interrupt-parent = <&pinctrl_ap>;
+		interrupts = <98 IRQ_TYPE_LEVEL_LOW>;
+		#sound-dai-cells = <0>;
+		cirrus,ts-inv = <1>;
+		sound-name-prefix = "Jack";
+	};
+};
+
+&i2c3 {
+	status = "okay";
+
+	speaker_amp: codec@38 {
+		compatible = "ti,sn012776", "ti,tas2764";
+		reg = <0x38>;
+		shutdown-gpios = <&pinctrl_ap 15 GPIO_ACTIVE_HIGH>;
+		interrupt-parent = <&pinctrl_ap>;
+		interrupts = <14 IRQ_TYPE_LEVEL_LOW>;
+		#sound-dai-cells = <0>;
+		ti,imon-slot-no = <0>;
+		ti,vmon-slot-no = <2>;
+	};
+};
