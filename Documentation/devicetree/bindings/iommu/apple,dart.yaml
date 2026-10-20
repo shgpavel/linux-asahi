@@ -55,6 +55,13 @@ properties:
   power-domains:
     maxItems: 1
 
+  apple,shared:
+    type: boolean
+    description:
+      The DART also translates for a coprocessor whose firmware set up some of
+      its streams. The OS must not reset it and enables only the streams it
+      uses itself.
+
 required:
   - compatible
   - reg
