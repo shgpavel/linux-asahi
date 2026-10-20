@@ -26,6 +26,7 @@
 
 #include "dcp.h"
 #include "dcp-internal.h"
+#include "ibootep.h"
 #include "iomfb.h"
 #include "iomfb_internal.h"
 #include "parser.h"
@@ -572,6 +573,7 @@ void iomfb_shutdown(struct apple_dcp *dcp)
 		break;
 	case DCP_FIRMWARE_V_27_0:
 		hrtimer_cancel(&dcp->iboot_vblank_timer);
+		iboot_release_fbs(dcp);
 		break;
 	default:
 		WARN_ONCE(true, "Unexpected firmware version: %u\n", dcp->fw_compat);

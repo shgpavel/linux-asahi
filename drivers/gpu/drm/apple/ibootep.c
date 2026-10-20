@@ -398,6 +398,28 @@ static void iboot_queue_vblank(struct apple_dcp *dcp, struct drm_crtc *crtc)
 	hrtimer_start(&dcp->iboot_vblank_timer, next, HRTIMER_MODE_ABS);
 }
 
+static void iboot_hold_fb(struct apple_dcp *dcp, struct drm_framebuffer *fb)
+{
+	if (dcp->iboot_fbs[0] == fb)
+		return;
+	drm_framebuffer_get(fb);
+	if (dcp->iboot_fbs[1])
+		drm_framebuffer_put(dcp->iboot_fbs[1]);
+	dcp->iboot_fbs[1] = dcp->iboot_fbs[0];
+	dcp->iboot_fbs[0] = fb;
+}
+
+void iboot_release_fbs(struct apple_dcp *dcp)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(dcp->iboot_fbs); i++) {
+		if (dcp->iboot_fbs[i])
+			drm_framebuffer_put(dcp->iboot_fbs[i]);
+		dcp->iboot_fbs[i] = NULL;
+	}
+}
+
 void iboot_flush(struct apple_dcp *dcp, struct drm_crtc *crtc,
 		 struct drm_atomic_commit *commit)
 {
@@ -424,8 +446,9 @@ void iboot_flush(struct apple_dcp *dcp, struct drm_crtc *crtc,
 			layer.surface_fmt = cpu_to_le32(fmt);
 			layer.colorspace = cpu_to_le32(2);
 			layer.eotf = cpu_to_le32(1);
-			iboot_cmd(dcp, IBOOT_SET_SURFACE, &layer, sizeof(layer),
-				  NULL, 0);
+			if (!iboot_cmd(dcp, IBOOT_SET_SURFACE, &layer,
+				       sizeof(layer), NULL, 0))
+				iboot_hold_fb(dcp, fb);
 		}
 	}
 
@@ -441,6 +464,7 @@ void iboot_poweroff(struct apple_dcp *dcp)
 {
 	iboot_set_power(dcp, false);
 	dcp->valid_mode = false;
+	iboot_release_fbs(dcp);
 }
 
 static void disp_service_init(struct apple_epic_service *service, const char *name,

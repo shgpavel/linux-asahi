@@ -36,5 +36,6 @@ void iboot_flush(struct apple_dcp *dcp, struct drm_crtc *crtc,
 		 struct drm_atomic_commit *commit);
 void iboot_poweron(struct apple_dcp *dcp);
 void iboot_poweroff(struct apple_dcp *dcp);
+void iboot_release_fbs(struct apple_dcp *dcp);
 
 #endif

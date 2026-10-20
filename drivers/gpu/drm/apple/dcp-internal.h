@@ -248,6 +248,7 @@ struct apple_dcp {
 	unsigned int iboot_hpd_tries;
 	struct hrtimer iboot_vblank_timer;
 	ktime_t iboot_last_vblank;
+	struct drm_framebuffer *iboot_fbs[2];
 	struct apple_dcp_afkep *dcpavservep;
 	struct dcpavserv dcpavserv;
 
