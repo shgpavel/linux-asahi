@@ -1154,9 +1154,9 @@ static int __bcm4378_send_calibration(struct bcm4377_data *bcm4377,
 		DIV_ROUND_UP(data_size, (size_t)BCM4378_CALIBRATION_CHUNK_SIZE);
 
 	if (!data) {
-		dev_err(&bcm4377->pdev->dev,
-			"no calibration data available.\n");
-		return -ENOENT;
+		dev_info(&bcm4377->pdev->dev,
+			 "no calibration data available, skipping\n");
+		return 0;
 	}
 
 	for (i = 0, left = data_size; i < blocks; ++i, left -= transfer_len) {
@@ -2228,18 +2228,8 @@ static int bcm4377_probe_of(struct bcm4377_data *bcm4377)
 	bcm4377->taurus_beamforming_cal_blob =
 		of_get_property(np, "brcm,taurus-bf-cal-blob",
 				&bcm4377->taurus_beamforming_cal_size);
-	if (!bcm4377->taurus_beamforming_cal_blob) {
-		dev_err(&bcm4377->pdev->dev,
-			"no brcm,taurus-bf-cal-blob property\n");
-		return -ENOENT;
-	}
 	bcm4377->taurus_cal_blob = of_get_property(np, "brcm,taurus-cal-blob",
 						   &bcm4377->taurus_cal_size);
-	if (!bcm4377->taurus_cal_blob) {
-		dev_err(&bcm4377->pdev->dev,
-			"no brcm,taurus-cal-blob property\n");
-		return -ENOENT;
-	}
 
 	return 0;
 }
