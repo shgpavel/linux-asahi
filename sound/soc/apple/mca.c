@@ -24,6 +24,7 @@
 #include <linux/clk.h>
 #include <linux/dma-mapping.h>
 #include <linux/init.h>
+#include <linux/iopoll.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -49,19 +50,21 @@
 #define REG_MCLK_CONF		0x4
 #define MCLK_CONF_DIV		GENMASK(11, 8)
 
-#define REG_SYNCGEN_STATUS	0x100
+#define CLUSTER_SYNCGEN_OFF	0x100
+#define REG_SYNCGEN_STATUS	0x0
 #define SYNCGEN_STATUS_EN	BIT(0)
-#define REG_SYNCGEN_MCLK_SEL	0x104
+#define REG_SYNCGEN_MCLK_SEL	0x4
 #define SYNCGEN_MCLK_SEL	GENMASK(3, 0)
-#define REG_SYNCGEN_HI_PERIOD	0x108
-#define REG_SYNCGEN_LO_PERIOD	0x10c
+#define REG_SYNCGEN_HI_PERIOD	0x8
+#define REG_SYNCGEN_LO_PERIOD	0xc
 
-#define REG_PORT_ENABLES	0x600
+#define CLUSTER_PORT_OFF	0x600
+#define REG_PORT_ENABLES	0x0
 #define PORT_ENABLES_CLOCKS	GENMASK(2, 1)
 #define PORT_ENABLES_TX_DATA	BIT(3)
-#define REG_PORT_CLOCK_SEL	0x604
+#define REG_PORT_CLOCK_SEL	0x4
 #define PORT_CLOCK_SEL		GENMASK(11, 8)
-#define REG_PORT_DATA_SEL	0x608
+#define REG_PORT_DATA_SEL	0x8
 #define PORT_DATA_SEL_TXA(cl)	(1 << ((cl)*2))
 #define PORT_DATA_SEL_TXB(cl)	(2 << ((cl)*2))
 
@@ -119,15 +122,75 @@
 #define SWITCH_STRIDE	0x8000
 #define CLUSTER_STRIDE	0x4000
 
+#define T8132_NCLUSTERS		6
+#define T8132_UNIT_STRIDE	0x100
+#define T8132_CLK_OFF		0x2000
+#define T8132_RX_SERDES_OFF	0x4000
+#define T8132_TX_SERDES_OFF	0x6000
+#define T8132_ADAPTER_OFF	0x8000
+#define T8132_SYNCGEN_OFF	0x20
+#define T8132_PORT_OFF		0x60
+#define T8132_MCLK_CONF_DIV	GENMASK(12, 8)
+
+#define T8132_REG_ADAPTER_EN	0x4
+#define T8132_ADAPTER_TX_EN	BIT(0)
+#define T8132_ADAPTER_RX_EN	BIT(4)
+#define T8132_ADAPTER_THRESHOLD	GENMASK(22, 16)
+
+#define T8132_REG_GRST_SYNC(g)	(0x100 + 4 * (g))
+#define T8132_REG_GRST_START	0x140
+#define T8132_REG_GRST_STOP	0x144
+#define T8132_REG_GRST_RX_START	0x150
+#define T8132_REG_GRST_RX_STOP	0x154
+#define T8132_REG_GRST_TX_START	0x160
+#define T8132_REG_GRST_TX_STOP	0x164
+#define T8132_REG_GRST_COMMIT	0x170
+
+#define T8132_MCLK_MUX_SEL	GENMASK(27, 24)
+#define T8132_MCLK_MUX_BUSY	BIT(30)
+
 #define MAX_NCLUSTERS	6
 
 #define APPLE_MCA_FMTBITS (SNDRV_PCM_FMTBIT_S16_LE | \
 			   SNDRV_PCM_FMTBIT_S24_LE | \
 			   SNDRV_PCM_FMTBIT_S32_LE)
 
+struct mca_serdes_regs {
+	int conf;
+	int bitstart;
+	int slotmask;
+	int port;
+};
+
+static const struct mca_serdes_regs mca_serdes_tx = {
+	.conf = REG_TX_SERDES_CONF,
+	.bitstart = REG_TX_SERDES_BITSTART,
+	.slotmask = REG_TX_SERDES_SLOTMASK,
+	.port = -1,
+};
+
+static const struct mca_serdes_regs mca_serdes_rx = {
+	.conf = REG_RX_SERDES_CONF,
+	.bitstart = REG_RX_SERDES_BITSTART,
+	.slotmask = REG_RX_SERDES_SLOTMASK,
+	.port = REG_RX_SERDES_PORT,
+};
+
+static const struct mca_serdes_regs mca_t8132_serdes_rx = {
+	.conf = REG_TX_SERDES_CONF,
+	.bitstart = REG_TX_SERDES_BITSTART,
+	.slotmask = REG_TX_SERDES_SLOTMASK,
+	.port = 0x14,
+};
+
 struct mca_cluster {
 	int no;
 	__iomem void *base;
+	__iomem void *syncgen;
+	__iomem void *port;
+	__iomem void *serdes[SNDRV_PCM_STREAM_LAST + 1];
+	__iomem void *adapter[SNDRV_PCM_STREAM_LAST + 1];
+	int running;
 	struct mca_data *host;
 	struct device *pd_dev;
 	struct clk *clk_parent;
@@ -158,6 +221,11 @@ struct mca_data {
 
 	__iomem void *switch_base;
 
+	bool t8132;
+	__iomem void *grst_base;
+	__iomem void *mclk_base;
+	const struct mca_serdes_regs *serdes_regs[SNDRV_PCM_STREAM_LAST + 1];
+
 	struct device *pd_dev;
 	struct reset_control *rstc;
 	struct device_link *pd_link;
@@ -169,13 +237,40 @@ struct mca_data {
 	struct mca_cluster clusters[] __counted_by(nclusters);
 };
 
-static void mca_modify(struct mca_cluster *cl, int regoffset, u32 mask, u32 val)
+static void mca_modify_reg(__iomem void *ptr, u32 mask, u32 val)
 {
-	__iomem void *ptr = cl->base + regoffset;
 	u32 newval;
 
 	newval = (val & mask) | (readl_relaxed(ptr) & ~mask);
 	writel_relaxed(newval, ptr);
+}
+
+static void mca_modify(struct mca_cluster *cl, int regoffset, u32 mask, u32 val)
+{
+	mca_modify_reg(cl->base + regoffset, mask, val);
+}
+
+static void mca_t8132_group_trigger(struct mca_cluster *cl, int stream,
+				    bool start)
+{
+	__iomem void *grst = cl->host->grst_base;
+	u32 mask = BIT(cl->no);
+	bool tx = stream == SNDRV_PCM_STREAM_PLAYBACK;
+	int others = cl->running & ~BIT(stream);
+
+	writel_relaxed(cl->no + 1, grst + T8132_REG_GRST_SYNC(cl->no));
+	if (start) {
+		writel_relaxed(mask, grst + T8132_REG_GRST_START);
+		writel_relaxed(tx ? 0 : mask, grst + T8132_REG_GRST_RX_START);
+		writel_relaxed(tx ? mask : 0, grst + T8132_REG_GRST_TX_START);
+		cl->running |= BIT(stream);
+	} else {
+		writel_relaxed(others ? 0 : mask, grst + T8132_REG_GRST_STOP);
+		writel_relaxed(tx ? 0 : mask, grst + T8132_REG_GRST_RX_STOP);
+		writel_relaxed(tx ? mask : 0, grst + T8132_REG_GRST_TX_STOP);
+		cl->running &= ~BIT(stream);
+	}
+	writel_relaxed(1, grst + T8132_REG_GRST_COMMIT);
 }
 
 /*
@@ -198,33 +293,32 @@ static void mca_fe_early_trigger(struct snd_pcm_substream *substream, int cmd,
 				 struct snd_soc_dai *dai)
 {
 	struct mca_cluster *cl = mca_dai_to_cluster(dai);
-	bool is_tx = substream->stream == SNDRV_PCM_STREAM_PLAYBACK;
-	int serdes_unit = is_tx ? CLUSTER_TX_OFF : CLUSTER_RX_OFF;
-	int serdes_conf =
-		serdes_unit + (is_tx ? REG_TX_SERDES_CONF : REG_RX_SERDES_CONF);
+	__iomem void *serdes = cl->serdes[substream->stream];
+	__iomem void *serdes_conf =
+		serdes + cl->host->serdes_regs[substream->stream]->conf;
 
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
 	case SNDRV_PCM_TRIGGER_RESUME:
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
-		mca_modify(cl, serdes_conf, SERDES_CONF_SYNC_SEL,
-			   FIELD_PREP(SERDES_CONF_SYNC_SEL, 0));
-		mca_modify(cl, serdes_conf, SERDES_CONF_SYNC_SEL,
-			   FIELD_PREP(SERDES_CONF_SYNC_SEL, 7));
-		mca_modify(cl, serdes_unit + REG_SERDES_STATUS,
-			   SERDES_STATUS_EN | SERDES_STATUS_RST,
-			   SERDES_STATUS_RST);
+		mca_modify_reg(serdes_conf, SERDES_CONF_SYNC_SEL,
+			       FIELD_PREP(SERDES_CONF_SYNC_SEL, 0));
+		mca_modify_reg(serdes_conf, SERDES_CONF_SYNC_SEL,
+			       FIELD_PREP(SERDES_CONF_SYNC_SEL, 7));
+		mca_modify_reg(serdes + REG_SERDES_STATUS,
+			       SERDES_STATUS_EN | SERDES_STATUS_RST,
+			       SERDES_STATUS_RST);
 		/*
 		 * Experiments suggest that it takes at most ~1 us
 		 * for the bit to clear, so wait 5 us for good measure.
 		 */
 		udelay(50);
-		WARN_ON(readl_relaxed(cl->base + serdes_unit + REG_SERDES_STATUS) &
+		WARN_ON(readl_relaxed(serdes + REG_SERDES_STATUS) &
 			SERDES_STATUS_RST);
-		mca_modify(cl, serdes_conf, SERDES_CONF_SYNC_SEL,
-			   FIELD_PREP(SERDES_CONF_SYNC_SEL, 0));
-		mca_modify(cl, serdes_conf, SERDES_CONF_SYNC_SEL,
-			   FIELD_PREP(SERDES_CONF_SYNC_SEL, cl->no + 1));
+		mca_modify_reg(serdes_conf, SERDES_CONF_SYNC_SEL,
+			       FIELD_PREP(SERDES_CONF_SYNC_SEL, 0));
+		mca_modify_reg(serdes_conf, SERDES_CONF_SYNC_SEL,
+			       FIELD_PREP(SERDES_CONF_SYNC_SEL, cl->no + 1));
 		/*
 		 * ADMAC gets started right after this. This delay seems
 		 * to be needed for that to be reliable, e.g. ensure the
@@ -241,23 +335,30 @@ static int mca_fe_trigger(struct snd_pcm_substream *substream, int cmd,
 			  struct snd_soc_dai *dai)
 {
 	struct mca_cluster *cl = mca_dai_to_cluster(dai);
-	bool is_tx = substream->stream == SNDRV_PCM_STREAM_PLAYBACK;
-	int serdes_unit = is_tx ? CLUSTER_TX_OFF : CLUSTER_RX_OFF;
+	__iomem void *serdes = cl->serdes[substream->stream];
 
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
 	case SNDRV_PCM_TRIGGER_RESUME:
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
-		mca_modify(cl, serdes_unit + REG_SERDES_STATUS,
-			   SERDES_STATUS_EN | SERDES_STATUS_RST,
-			   SERDES_STATUS_EN);
+		if (cl->host->t8132) {
+			mca_t8132_group_trigger(cl, substream->stream, true);
+			break;
+		}
+		mca_modify_reg(serdes + REG_SERDES_STATUS,
+			       SERDES_STATUS_EN | SERDES_STATUS_RST,
+			       SERDES_STATUS_EN);
 		break;
 
 	case SNDRV_PCM_TRIGGER_STOP:
 	case SNDRV_PCM_TRIGGER_SUSPEND:
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
-		mca_modify(cl, serdes_unit + REG_SERDES_STATUS,
-			   SERDES_STATUS_EN, 0);
+		if (cl->host->t8132) {
+			mca_t8132_group_trigger(cl, substream->stream, false);
+			break;
+		}
+		mca_modify_reg(serdes + REG_SERDES_STATUS,
+			       SERDES_STATUS_EN, 0);
 		break;
 
 	default:
@@ -313,9 +414,9 @@ static int mca_fe_enable_clocks(struct mca_cluster *cl)
 		return -EINVAL;
 	}
 
-	writel_relaxed(cl->no + 1, cl->base + REG_SYNCGEN_MCLK_SEL);
-	mca_modify(cl, REG_SYNCGEN_STATUS, SYNCGEN_STATUS_EN,
-		   SYNCGEN_STATUS_EN);
+	writel_relaxed(cl->no + 1, cl->syncgen + REG_SYNCGEN_MCLK_SEL);
+	mca_modify_reg(cl->syncgen + REG_SYNCGEN_STATUS, SYNCGEN_STATUS_EN,
+		       SYNCGEN_STATUS_EN);
 	mca_modify(cl, REG_STATUS, STATUS_MCLK_EN, STATUS_MCLK_EN);
 
 	return 0;
@@ -323,7 +424,7 @@ static int mca_fe_enable_clocks(struct mca_cluster *cl)
 
 static void mca_fe_disable_clocks(struct mca_cluster *cl)
 {
-	mca_modify(cl, REG_SYNCGEN_STATUS, SYNCGEN_STATUS_EN, 0);
+	mca_modify_reg(cl->syncgen + REG_SYNCGEN_STATUS, SYNCGEN_STATUS_EN, 0);
 	mca_modify(cl, REG_STATUS, STATUS_MCLK_EN, 0);
 
 	if (cl->pd_link) {
@@ -379,9 +480,9 @@ static int mca_fe_prepare(struct snd_pcm_substream *substream,
 		}
 
 		writel_relaxed(port + 6 + 1,
-			       cl->base + REG_SYNCGEN_MCLK_SEL);
-		mca_modify(cl, REG_SYNCGEN_STATUS, SYNCGEN_STATUS_EN,
-			   SYNCGEN_STATUS_EN);
+			       cl->syncgen + REG_SYNCGEN_MCLK_SEL);
+		mca_modify_reg(cl->syncgen + REG_SYNCGEN_STATUS,
+			       SYNCGEN_STATUS_EN, SYNCGEN_STATUS_EN);
 	}
 	cl->syncgen_in_use |= 1 << substream->stream;
 
@@ -393,6 +494,11 @@ static int mca_fe_hw_free(struct snd_pcm_substream *substream,
 {
 	struct mca_cluster *cl = mca_dai_to_cluster(dai);
 
+	if (cl->host->t8132)
+		mca_modify_reg(cl->adapter[substream->stream] + T8132_REG_ADAPTER_EN,
+			       substream->stream == SNDRV_PCM_STREAM_PLAYBACK ?
+			       T8132_ADAPTER_TX_EN : T8132_ADAPTER_RX_EN, 0);
+
 	if (cl->clk_provider)
 		return 0;
 
@@ -400,7 +506,7 @@ static int mca_fe_hw_free(struct snd_pcm_substream *substream,
 	if (cl->syncgen_in_use)
 		return 0;
 
-	mca_modify(cl, REG_SYNCGEN_STATUS, SYNCGEN_STATUS_EN, 0);
+	mca_modify_reg(cl->syncgen + REG_SYNCGEN_STATUS, SYNCGEN_STATUS_EN, 0);
 	if (cl->pd_link) {
 		device_link_del(cl->pd_link);
 		cl->pd_link = NULL;
@@ -417,11 +523,13 @@ static unsigned int mca_crop_mask(unsigned int mask, int nchans)
 	return mask;
 }
 
-static int mca_configure_serdes(struct mca_cluster *cl, int serdes_unit,
+static int mca_configure_serdes(struct mca_cluster *cl, int stream,
 				unsigned int mask, int slots, int nchans,
-				int slot_width, bool is_tx, int portmask)
+				int slot_width, int portmask)
 {
-	__iomem void *serdes_base = cl->base + serdes_unit;
+	__iomem void *serdes_base = cl->serdes[stream];
+	const struct mca_serdes_regs *regs = cl->host->serdes_regs[stream];
+	bool is_tx = stream == SNDRV_PCM_STREAM_PLAYBACK;
 	u32 serdes_conf, serdes_conf_mask;
 
 	serdes_conf_mask = SERDES_CONF_WIDTH_MASK | SERDES_CONF_NCHANS;
@@ -459,27 +567,24 @@ static int mca_configure_serdes(struct mca_cluster *cl, int serdes_unit,
 			       SERDES_CONF_NO_DATA_FEEDBACK;
 	}
 
-	mca_modify(cl,
-		   serdes_unit +
-			   (is_tx ? REG_TX_SERDES_CONF : REG_RX_SERDES_CONF),
-		   serdes_conf_mask, serdes_conf);
+	mca_modify_reg(serdes_base + regs->conf, serdes_conf_mask, serdes_conf);
 
 	if (is_tx) {
 		writel_relaxed(0xffffffff,
-			       serdes_base + REG_TX_SERDES_SLOTMASK);
+			       serdes_base + regs->slotmask);
 		writel_relaxed(~((u32)mca_crop_mask(mask, nchans)),
-			       serdes_base + REG_TX_SERDES_SLOTMASK + 0x4);
+			       serdes_base + regs->slotmask + 0x4);
 		writel_relaxed(0xffffffff,
-			       serdes_base + REG_TX_SERDES_SLOTMASK + 0x8);
+			       serdes_base + regs->slotmask + 0x8);
 		writel_relaxed(~((u32)mask),
-			       serdes_base + REG_TX_SERDES_SLOTMASK + 0xc);
+			       serdes_base + regs->slotmask + 0xc);
 	} else {
 		writel_relaxed(0xffffffff,
-			       serdes_base + REG_RX_SERDES_SLOTMASK);
+			       serdes_base + regs->slotmask);
 		writel_relaxed(~((u32)mca_crop_mask(mask, nchans)),
-			       serdes_base + REG_RX_SERDES_SLOTMASK + 0x4);
+			       serdes_base + regs->slotmask + 0x4);
 		writel_relaxed(portmask,
-			       serdes_base + REG_RX_SERDES_PORT);
+			       serdes_base + regs->port);
 	}
 
 	return 0;
@@ -533,6 +638,7 @@ static int mca_fe_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 	bool fpol_inv = false;
 	u32 serdes_conf = 0;
 	u32 bitstart;
+	int stream;
 
 	switch (fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) {
 	case SND_SOC_DAIFMT_BP_FP:
@@ -577,14 +683,13 @@ static int mca_fe_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 	if (!fpol_inv)
 		goto err;
 
-	mca_modify(cl, CLUSTER_TX_OFF + REG_TX_SERDES_CONF,
-		   SERDES_CONF_BCLK_POL, serdes_conf);
-	mca_modify(cl, CLUSTER_RX_OFF + REG_RX_SERDES_CONF,
-		   SERDES_CONF_BCLK_POL, serdes_conf);
-	writel_relaxed(bitstart,
-		       cl->base + CLUSTER_TX_OFF + REG_TX_SERDES_BITSTART);
-	writel_relaxed(bitstart,
-		       cl->base + CLUSTER_RX_OFF + REG_RX_SERDES_BITSTART);
+	for_each_pcm_streams(stream) {
+		const struct mca_serdes_regs *regs = mca->serdes_regs[stream];
+
+		mca_modify_reg(cl->serdes[stream] + regs->conf,
+			       SERDES_CONF_BCLK_POL, serdes_conf);
+		writel_relaxed(bitstart, cl->serdes[stream] + regs->bitstart);
+	}
 
 	return 0;
 
@@ -600,6 +705,50 @@ static int mca_set_bclk_ratio(struct snd_soc_dai *dai, unsigned int ratio)
 	cl->bclk_ratio = ratio;
 
 	return 0;
+}
+
+static const struct {
+	unsigned long rate;
+	u32 sel;
+} mca_t8132_mclk_srcs[] = {
+	{ 24000000, 0 },
+	{ 12000000, 5 },
+	{ 6000000, 6 },
+	{ 12288000, 7 },
+	{ 6144000, 8 },
+	{ 5644800, 9 },
+	{ 3072000, 10 },
+	{ 2822400, 11 },
+};
+
+static int mca_t8132_set_mclk(struct mca_cluster *cl, unsigned long rate)
+{
+	__iomem void *mux = cl->host->mclk_base + 4 * cl->no;
+	unsigned long src, div;
+	u32 val;
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(mca_t8132_mclk_srcs); i++) {
+		src = mca_t8132_mclk_srcs[i].rate;
+		if (!rate || src % rate)
+			continue;
+		div = src / rate;
+		if (div > FIELD_MAX(T8132_MCLK_CONF_DIV))
+			continue;
+
+		writel_relaxed(FIELD_PREP(T8132_MCLK_CONF_DIV, div),
+			       cl->base + REG_MCLK_CONF);
+		mca_modify_reg(mux, T8132_MCLK_MUX_SEL,
+			       FIELD_PREP(T8132_MCLK_MUX_SEL,
+					  mca_t8132_mclk_srcs[i].sel));
+		return readl_poll_timeout_atomic(mux, val,
+						 !(val & T8132_MCLK_MUX_BUSY),
+						 1, 1000);
+	}
+
+	dev_err(cl->host->dev, "cluster %d: no MCLK source for %lu Hz\n",
+		cl->no, rate);
+	return -EINVAL;
 }
 
 static int mca_fe_hw_params(struct snd_pcm_substream *substream,
@@ -668,13 +817,32 @@ static int mca_fe_hw_params(struct snd_pcm_substream *substream,
 	if (!portmask)
 		return -EINVAL;
 
-	ret = mca_configure_serdes(cl, is_tx ? CLUSTER_TX_OFF : CLUSTER_RX_OFF,
+	ret = mca_configure_serdes(cl, substream->stream,
 				   tdm_mask, tdm_slots, params_channels(params),
-				   tdm_slot_width, is_tx, portmask);
+				   tdm_slot_width, portmask);
 	if (ret)
 		return ret;
 
 	pad = 32 - params_width(params);
+
+	if (mca->t8132) {
+		__iomem void *adapter = cl->adapter[substream->stream];
+
+		if (is_tx)
+			mca_modify_reg(adapter, DMA_ADAPTER_TX_LSB_PAD |
+				       DMA_ADAPTER_TX_NCHANS | T8132_ADAPTER_THRESHOLD,
+				       FIELD_PREP(DMA_ADAPTER_TX_LSB_PAD, pad) |
+				       FIELD_PREP(T8132_ADAPTER_THRESHOLD, 0x10));
+		else
+			mca_modify_reg(adapter, DMA_ADAPTER_RX_MSB_PAD |
+				       DMA_ADAPTER_RX_NCHANS | T8132_ADAPTER_THRESHOLD,
+				       FIELD_PREP(DMA_ADAPTER_RX_MSB_PAD, pad) |
+				       FIELD_PREP(T8132_ADAPTER_THRESHOLD, 0x10));
+		mca_modify_reg(adapter + T8132_REG_ADAPTER_EN,
+			       is_tx ? T8132_ADAPTER_TX_EN : T8132_ADAPTER_RX_EN,
+			       is_tx ? T8132_ADAPTER_TX_EN : T8132_ADAPTER_RX_EN);
+		goto clocks;
+	}
 
 	/*
 	 * TODO: Here the register semantics aren't clear.
@@ -686,29 +854,25 @@ static int mca_fe_hw_params(struct snd_pcm_substream *substream,
 		 FIELD_PREP(DMA_ADAPTER_TX_LSB_PAD, pad) |
 		 FIELD_PREP(DMA_ADAPTER_RX_MSB_PAD, pad);
 
-#ifndef USE_RXB_FOR_CAPTURE
-	writel_relaxed(regval, mca->switch_base + REG_DMA_ADAPTER_A(cl->no));
-#else
-	if (is_tx)
-		writel_relaxed(regval,
-			       mca->switch_base + REG_DMA_ADAPTER_A(cl->no));
-	else
-		writel_relaxed(regval,
-			       mca->switch_base + REG_DMA_ADAPTER_B(cl->no));
-#endif
+	writel_relaxed(regval, cl->adapter[substream->stream]);
 
+clocks:
 	if (!mca_fe_clocks_in_use(cl)) {
 		/*
 		 * Set up FSYNC duty cycle as even as possible.
 		 */
 		writel_relaxed((bclk_ratio / 2) - 1,
-			       cl->base + REG_SYNCGEN_HI_PERIOD);
+			       cl->syncgen + REG_SYNCGEN_HI_PERIOD);
 		writel_relaxed(((bclk_ratio + 1) / 2) - 1,
-			       cl->base + REG_SYNCGEN_LO_PERIOD);
-		writel_relaxed(FIELD_PREP(MCLK_CONF_DIV, 0x1),
-			       cl->base + REG_MCLK_CONF);
+			       cl->syncgen + REG_SYNCGEN_LO_PERIOD);
 
-		ret = clk_set_rate(cl->clk_parent, bclk_ratio * samp_rate);
+		if (mca->t8132) {
+			ret = mca_t8132_set_mclk(cl, bclk_ratio * samp_rate);
+		} else {
+			writel_relaxed(FIELD_PREP(MCLK_CONF_DIV, 0x1),
+				       cl->base + REG_MCLK_CONF);
+			ret = clk_set_rate(cl->clk_parent, bclk_ratio * samp_rate);
+		}
 		if (ret) {
 			dev_err(mca->dev, "cluster %d: unable to set clock parent: %d\n",
 				cl->no, ret);
@@ -812,10 +976,11 @@ static int mca_be_startup(struct snd_pcm_substream *substream,
 	fe_cl = mca_dai_to_cluster(snd_soc_rtd_to_cpu(fe, 0));
 
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
-		writel_relaxed(PORT_DATA_SEL_TXA(fe_cl->no),
-			       cl->base + REG_PORT_DATA_SEL);
-		mca_modify(cl, REG_PORT_ENABLES, PORT_ENABLES_TX_DATA,
-			   PORT_ENABLES_TX_DATA);
+		writel_relaxed(mca->t8132 ? BIT(fe_cl->no) :
+			       PORT_DATA_SEL_TXA(fe_cl->no),
+			       cl->port + REG_PORT_DATA_SEL);
+		mca_modify_reg(cl->port + REG_PORT_ENABLES, PORT_ENABLES_TX_DATA,
+			       PORT_ENABLES_TX_DATA);
 	}
 
 	if (!fe_cl->clk_provider)
@@ -835,9 +1000,9 @@ static int mca_be_startup(struct snd_pcm_substream *substream,
 	}
 
 	writel_relaxed(FIELD_PREP(PORT_CLOCK_SEL, fe_cl->no + 1),
-		       cl->base + REG_PORT_CLOCK_SEL);
-	mca_modify(cl, REG_PORT_ENABLES, PORT_ENABLES_CLOCKS,
-		   PORT_ENABLES_CLOCKS);
+		       cl->port + REG_PORT_CLOCK_SEL);
+	mca_modify_reg(cl->port + REG_PORT_ENABLES, PORT_ENABLES_CLOCKS,
+		       PORT_ENABLES_CLOCKS);
 
 	scoped_guard(mutex, &mca->port_mutex)
 		cl->port_clk_driver = fe_cl->no;
@@ -880,8 +1045,8 @@ static void mca_be_shutdown(struct snd_pcm_substream *substream,
 	fe_cl = mca_dai_to_cluster(snd_soc_rtd_to_cpu(fe, 0));
 
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
-		mca_modify(cl, REG_PORT_ENABLES, PORT_ENABLES_TX_DATA, 0);
-		writel_relaxed(0, cl->base + REG_PORT_DATA_SEL);
+		mca_modify_reg(cl->port + REG_PORT_ENABLES, PORT_ENABLES_TX_DATA, 0);
+		writel_relaxed(0, cl->port + REG_PORT_DATA_SEL);
 	}
 
 	if (!fe_cl->clk_provider)
@@ -893,8 +1058,8 @@ static void mca_be_shutdown(struct snd_pcm_substream *substream,
 		 * Were we the last direction to shutdown?
 		 * Turn off the lights (clocks).
 		 */
-		mca_modify(cl, REG_PORT_ENABLES, PORT_ENABLES_CLOCKS, 0);
-		writel_relaxed(0, cl->base + REG_PORT_CLOCK_SEL);
+		mca_modify_reg(cl->port + REG_PORT_ENABLES, PORT_ENABLES_CLOCKS, 0);
+		writel_relaxed(0, cl->port + REG_PORT_CLOCK_SEL);
 		scoped_guard(mutex, &mca->port_mutex)
 			cl->port_clk_driver = -1;
 
@@ -1025,6 +1190,13 @@ static snd_pcm_uframes_t mca_pointer(struct snd_soc_component *component,
 static struct dma_chan *mca_request_dma_channel(struct mca_cluster *cl, unsigned int stream)
 {
 	bool is_tx = (stream == SNDRV_PCM_STREAM_PLAYBACK);
+
+	if (cl->host->t8132) {
+		char *name = devm_kasprintf(cl->host->dev, GFP_KERNEL,
+					    is_tx ? "tx%d" : "rx%d", cl->no);
+
+		return of_dma_request_slave_channel(cl->host->dev->of_node, name);
+	}
 #ifndef USE_RXB_FOR_CAPTURE
 	char *name = devm_kasprintf(cl->host->dev, GFP_KERNEL,
 				    is_tx ? "tx%da" : "rx%da", cl->no);
@@ -1145,15 +1317,25 @@ static int apple_mca_probe(struct platform_device *pdev)
 	struct resource *res;
 	void __iomem *base;
 	int nclusters;
+	bool t8132;
 	int ret, i;
 
 	base = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
 	if (IS_ERR(base))
 		return PTR_ERR(base);
 
-	if (resource_size(res) < CLUSTER_STRIDE)
-		return -EINVAL;
-	nclusters = (resource_size(res) - CLUSTER_STRIDE) / CLUSTER_STRIDE + 1;
+	t8132 = of_device_is_compatible(pdev->dev.of_node, "apple,t8132-mca");
+	if (t8132) {
+		if (resource_size(res) < T8132_ADAPTER_OFF +
+		    T8132_UNIT_STRIDE * T8132_NCLUSTERS)
+			return -EINVAL;
+		nclusters = T8132_NCLUSTERS;
+	} else {
+		if (resource_size(res) < CLUSTER_STRIDE)
+			return -EINVAL;
+		nclusters = (resource_size(res) - CLUSTER_STRIDE) /
+			    CLUSTER_STRIDE + 1;
+	}
 
 	mca = devm_kzalloc(&pdev->dev, struct_size(mca, clusters, nclusters),
 			   GFP_KERNEL);
@@ -1165,10 +1347,20 @@ static int apple_mca_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, mca);
 	clusters = mca->clusters;
 
-	mca->switch_base =
-		devm_platform_ioremap_resource(pdev, 1);
-	if (IS_ERR(mca->switch_base))
-		return PTR_ERR(mca->switch_base);
+	mca->t8132 = t8132;
+	mca->serdes_regs[SNDRV_PCM_STREAM_PLAYBACK] = &mca_serdes_tx;
+	if (t8132) {
+		mca->serdes_regs[SNDRV_PCM_STREAM_CAPTURE] = &mca_t8132_serdes_rx;
+		mca->grst_base = base;
+		mca->mclk_base = devm_platform_ioremap_resource(pdev, 1);
+		if (IS_ERR(mca->mclk_base))
+			return PTR_ERR(mca->mclk_base);
+	} else {
+		mca->serdes_regs[SNDRV_PCM_STREAM_CAPTURE] = &mca_serdes_rx;
+		mca->switch_base = devm_platform_ioremap_resource(pdev, 1);
+		if (IS_ERR(mca->switch_base))
+			return PTR_ERR(mca->switch_base);
+	}
 
 	mca->rstc = devm_reset_control_get_optional_shared(&pdev->dev, NULL);
 	if (IS_ERR(mca->rstc))
@@ -1203,14 +1395,43 @@ static int apple_mca_probe(struct platform_device *pdev)
 
 		cl->host = mca;
 		cl->no = i;
-		cl->base = base + CLUSTER_STRIDE * i;
 		cl->port_clk_driver = -1;
-		cl->clk_parent = of_clk_get(pdev->dev.of_node, i);
-		if (IS_ERR(cl->clk_parent)) {
-			dev_err(&pdev->dev, "unable to obtain clock %d: %ld\n",
-				i, PTR_ERR(cl->clk_parent));
-			ret = PTR_ERR(cl->clk_parent);
-			goto err_release;
+		if (t8132) {
+			cl->base = base + T8132_CLK_OFF + T8132_UNIT_STRIDE * i;
+			cl->syncgen = cl->base + T8132_SYNCGEN_OFF;
+			cl->port = cl->base + T8132_PORT_OFF;
+			cl->serdes[SNDRV_PCM_STREAM_PLAYBACK] =
+				base + T8132_TX_SERDES_OFF + T8132_UNIT_STRIDE * i;
+			cl->serdes[SNDRV_PCM_STREAM_CAPTURE] =
+				base + T8132_RX_SERDES_OFF + T8132_UNIT_STRIDE * i;
+			cl->adapter[SNDRV_PCM_STREAM_PLAYBACK] =
+				base + T8132_ADAPTER_OFF + T8132_UNIT_STRIDE * i;
+			cl->adapter[SNDRV_PCM_STREAM_CAPTURE] =
+				cl->adapter[SNDRV_PCM_STREAM_PLAYBACK];
+		} else {
+			cl->base = base + CLUSTER_STRIDE * i;
+			cl->syncgen = cl->base + CLUSTER_SYNCGEN_OFF;
+			cl->port = cl->base + CLUSTER_PORT_OFF;
+			cl->serdes[SNDRV_PCM_STREAM_PLAYBACK] =
+				cl->base + CLUSTER_TX_OFF;
+			cl->serdes[SNDRV_PCM_STREAM_CAPTURE] =
+				cl->base + CLUSTER_RX_OFF;
+			cl->adapter[SNDRV_PCM_STREAM_PLAYBACK] =
+				mca->switch_base + REG_DMA_ADAPTER_A(i);
+#ifndef USE_RXB_FOR_CAPTURE
+			cl->adapter[SNDRV_PCM_STREAM_CAPTURE] =
+				mca->switch_base + REG_DMA_ADAPTER_A(i);
+#else
+			cl->adapter[SNDRV_PCM_STREAM_CAPTURE] =
+				mca->switch_base + REG_DMA_ADAPTER_B(i);
+#endif
+			cl->clk_parent = of_clk_get(pdev->dev.of_node, i);
+			if (IS_ERR(cl->clk_parent)) {
+				dev_err(&pdev->dev, "unable to obtain clock %d: %ld\n",
+					i, PTR_ERR(cl->clk_parent));
+				ret = PTR_ERR(cl->clk_parent);
+				goto err_release;
+			}
 		}
 		cl->pd_dev = dev_pm_domain_attach_by_id(&pdev->dev, i + 1);
 		if (IS_ERR(cl->pd_dev)) {
@@ -1299,6 +1520,7 @@ static void apple_mca_remove(struct platform_device *pdev)
 }
 
 static const struct of_device_id apple_mca_of_match[] = {
+	{ .compatible = "apple,t8132-mca", },
 	{ .compatible = "apple,t8103-mca", },
 	{ .compatible = "apple,mca", },
 	{}
