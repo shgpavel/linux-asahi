@@ -366,7 +366,6 @@ int dcp_get_modes(struct drm_connector *connector)
 	}
 
 	if (dcp->nr_modes && dcp->dcpavserv.enabled &&
-	    dcp->fw_compat != DCP_FIRMWARE_V_27_0 &&
 	    !apple_connector->drm_edid) {
 		const struct drm_edid *edid;
 		edid = dcpavserv_copy_edid(dcp->dcpavserv.service);

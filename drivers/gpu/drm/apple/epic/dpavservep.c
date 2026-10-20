@@ -28,6 +28,7 @@ static void dcpavserv_init(struct apple_epic_service *service, const char *name,
 		}
 		dcp->dcpavserv.service = service;
 		dcp->dcpavserv.enabled = true;
+		service->oob_rsp = service->ep->v2;
 		service->cookie = &dcp->dcpavserv;
 		complete(&dcp->dcpavserv.enable_completion);
 	}

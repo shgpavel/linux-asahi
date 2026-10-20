@@ -1213,7 +1213,8 @@ static void afk_receive_message_worker(struct work_struct *work_)
 
 	default:
 		dev_err(work->ep->dcp->dev,
-			"Received unknown AFK message type: 0x%x\n", type);
+			"Received unknown AFK message type: 0x%x (0x%016llx)\n",
+			type, work->message);
 	}
 
 	kfree(work);
@@ -1445,7 +1446,7 @@ static int afk_send_v2_internal(struct apple_dcp_afkep *ep, u32 code)
 
 static int afk_send_v2_command(struct apple_epic_service *service, u8 seq,
 			       u8 type, dma_addr_t txbuf_dma, size_t txlen,
-			       size_t rxlen)
+			       dma_addr_t rxbuf_dma, size_t rxlen)
 {
 	struct {
 		struct epic_v2_cmd_hdr hdr;
@@ -1458,6 +1459,10 @@ static int afk_send_v2_command(struct apple_epic_service *service, u8 seq,
 	cmd.hdr.value = cpu_to_le32(rxlen);
 	cmd.oob.cmd_addr = cpu_to_le64(txlen ? txbuf_dma : 0);
 	cmd.oob.cmd_len = cpu_to_le32(txlen);
+	if (service->oob_rsp) {
+		cmd.oob.rsp_addr = cpu_to_le64(rxbuf_dma);
+		cmd.oob.rsp_len = cpu_to_le32(rxlen);
+	}
 
 	return afk_send_v2_msg(service->ep, service->channel,
 			       EPIC_V2_KIND_COMMAND, type, seq, 0, &cmd,
@@ -1528,7 +1533,7 @@ int afk_send_command(struct apple_epic_service *service, u8 type,
 
 	if (ep->v2)
 		ret = afk_send_v2_command(service, tag, type, txbuf_dma,
-					  payload_len, output_len);
+					  payload_len, rxbuf_dma, output_len);
 	else
 		ret = afk_send_epic(service->ep, service->channel, tag,
 				    EPIC_TYPE_COMMAND, EPIC_CAT_COMMAND, type,

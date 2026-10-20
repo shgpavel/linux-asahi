@@ -48,6 +48,7 @@ struct apple_epic_service {
 	u32 channel;
 	bool enabled;
 	bool torndown;
+	bool oob_rsp;
 
 	void *cookie;
 
