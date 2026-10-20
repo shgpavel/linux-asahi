@@ -18,17 +18,29 @@ enum idle_state {
 	STATE_COUNT
 };
 
+#define APPLE_WFI_SAVE \
+	"str x30, [sp, #-16]!\n" \
+	"stp x28, x29, [sp, #-16]!\n" \
+	"stp x26, x27, [sp, #-16]!\n" \
+	"stp x24, x25, [sp, #-16]!\n" \
+	"stp x22, x23, [sp, #-16]!\n" \
+	"stp x20, x21, [sp, #-16]!\n" \
+	"stp x18, x19, [sp, #-16]!\n"
+
+#define APPLE_WFI_RESTORE \
+	"ldp x18, x19, [sp], #16\n" \
+	"ldp x20, x21, [sp], #16\n" \
+	"ldp x22, x23, [sp], #16\n" \
+	"ldp x24, x25, [sp], #16\n" \
+	"ldp x26, x27, [sp], #16\n" \
+	"ldp x28, x29, [sp], #16\n" \
+	"ldr x30, [sp], #16\n"
+
 asm(
 	".pushsection .cpuidle.text, \"ax\"\n"
 	".type apple_cpu_deep_wfi, @function\n"
 	"apple_cpu_deep_wfi:\n"
-		"str x30, [sp, #-16]!\n"
-		"stp x28, x29, [sp, #-16]!\n"
-		"stp x26, x27, [sp, #-16]!\n"
-		"stp x24, x25, [sp, #-16]!\n"
-		"stp x22, x23, [sp, #-16]!\n"
-		"stp x20, x21, [sp, #-16]!\n"
-		"stp x18, x19, [sp, #-16]!\n"
+	APPLE_WFI_SAVE
 
 		"mrs x0, s3_5_c15_c5_0\n"
 		"orr x0, x0, #(3L << 24)\n"
@@ -45,19 +57,34 @@ asm(
 		"bic x0, x0, #(1L << 24)\n"
 		"msr s3_5_c15_c5_0, x0\n"
 
-		"ldp x18, x19, [sp], #16\n"
-		"ldp x20, x21, [sp], #16\n"
-		"ldp x22, x23, [sp], #16\n"
-		"ldp x24, x25, [sp], #16\n"
-		"ldp x26, x27, [sp], #16\n"
-		"ldp x28, x29, [sp], #16\n"
-		"ldr x30, [sp], #16\n"
+	APPLE_WFI_RESTORE
 
 		"ret\n"
 	".popsection\n"
 );
 
 void apple_cpu_deep_wfi(void);
+
+asm(
+	".pushsection .cpuidle.text, \"ax\"\n"
+	".type apple_cpu_lossy_wfi, @function\n"
+	"apple_cpu_lossy_wfi:\n"
+	APPLE_WFI_SAVE
+
+	"1:\n"
+		"dsb sy\n"
+		"wfi\n"
+
+		"mrs x0, ISR_EL1\n"
+		"cbz x0, 1b\n"
+
+	APPLE_WFI_RESTORE
+
+		"ret\n"
+	".popsection\n"
+);
+
+void apple_cpu_lossy_wfi(void);
 
 static __cpuidle int apple_enter_wfi(struct cpuidle_device *dev, struct cpuidle_driver *drv, int index)
 {
@@ -86,6 +113,20 @@ static __cpuidle int apple_enter_idle(struct cpuidle_device *dev, struct cpuidle
 		break;
 	}
 
+	ct_cpuidle_exit();
+
+	cpu_pm_exit();
+
+	return index;
+}
+
+static __cpuidle int apple_enter_lossy_wfi(struct cpuidle_device *dev, struct cpuidle_driver *drv, int index)
+{
+	if (cpu_pm_enter())
+		return -1;
+
+	ct_cpuidle_enter();
+	apple_cpu_lossy_wfi();
 	ct_cpuidle_exit();
 
 	cpu_pm_exit();
@@ -122,9 +163,30 @@ static struct cpuidle_driver apple_idle_driver = {
 	.state_count = STATE_COUNT,
 };
 
+static struct cpuidle_driver apple_lossy_idle_driver = {
+	.name = "apple_idle",
+	.owner = THIS_MODULE,
+	.states = {
+		[STATE_WFI] = {
+			.enter			= apple_enter_lossy_wfi,
+			.enter_s2idle		= apple_enter_lossy_wfi,
+			.exit_latency		= 10,
+			.target_residency	= 20,
+			.power_usage            = 0,
+			.name			= "WFI",
+			.desc			= "CPU powered down",
+			.flags			= CPUIDLE_FLAG_RCU_IDLE,
+		},
+	},
+	.safe_state_index = STATE_WFI,
+	.state_count = 1,
+};
+
+static struct cpuidle_driver *apple_idle_drv = &apple_idle_driver;
+
 static int apple_cpuidle_probe(struct platform_device *pdev)
 {
-	return cpuidle_register(&apple_idle_driver, NULL);
+	return cpuidle_register(apple_idle_drv, NULL);
 }
 
 static struct platform_driver apple_cpuidle_driver = {
@@ -158,8 +220,12 @@ static int __init apple_cpuidle_init(void)
 	      of_machine_is_compatible("apple,t6030") ||
 	      of_machine_is_compatible("apple,t6031") ||
 	      of_machine_is_compatible("apple,t6032") ||
-	      of_machine_is_compatible("apple,t6034")))
+	      of_machine_is_compatible("apple,t6034") ||
+	      of_machine_is_compatible("apple,t8132")))
 		return 0;
+
+	if (of_machine_is_compatible("apple,t8132"))
+		apple_idle_drv = &apple_lossy_idle_driver;
 
 	pdev = platform_device_register_simple("cpuidle-apple", -1, NULL, 0);
 	if (IS_ERR(pdev)) {
