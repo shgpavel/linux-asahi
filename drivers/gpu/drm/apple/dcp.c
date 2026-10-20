@@ -474,6 +474,8 @@ static irqreturn_t dcp_dp2hdmi_hpd(int irq, void *data)
 	}
 
 	if (connected) {
+		if (dcp->fw_compat == DCP_FIRMWARE_V_27_0 && !dcp->nr_modes)
+			dcp_dptx_disconnect(dcp, 0);
 		dcp_dptx_connect(dcp, 0);
 		if (dcp->fw_compat == DCP_FIRMWARE_V_27_0)
 			iboot_hpd_changed(dcp);
