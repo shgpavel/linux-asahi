@@ -10,6 +10,7 @@
 #include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/phy/phy.h>
 #include <dt-bindings/pinctrl/apple.h>
+#include <dt-bindings/spmi/spmi.h>
 
 / {
 	compatible = "apple,t8132", "apple,arm-platform";
@@ -549,6 +550,67 @@
 			             <AIC_IRQ 505 IRQ_TYPE_LEVEL_HIGH>;
 		};
 
+		nub_spmi: spmi@388714000 {
+			compatible = "apple,t8132-spmi", "apple,t8103-spmi";
+			reg = <0x3 0x88714000 0x0 0x100>;
+			#address-cells = <2>;
+			#size-cells = <0>;
+			#interrupt-cells = <2>;
+			interrupt-controller;
+			interrupt-parent = <&aic>;
+			interrupts = <AIC_IRQ 513 IRQ_TYPE_LEVEL_HIGH>;
+
+			pmic1: pmic@e {
+				compatible = "apple,abbey-pmic", "apple,spmi-nvmem";
+				reg = <0xe SPMI_USID>;
+
+				nvmem-layout {
+					compatible = "fixed-layout";
+					#address-cells = <1>;
+					#size-cells = <1>;
+
+					pm_setting: pm-setting@2001 {
+						reg = <0x2001 0x1>;
+					};
+
+					rtc_offset: rtc-offset@2100 {
+						reg = <0x2100 0x6>;
+					};
+
+					fault_shadow: fault-shadow@867b {
+						reg = <0x867b 0x10>;
+					};
+
+					socd: socd@8b00 {
+						reg = <0x8b00 0x400>;
+					};
+
+					boot_stage: boot-stage@f801 {
+						reg = <0xf801 0x1>;
+					};
+
+					boot_error_count: boot-error-count@f802,0 {
+						reg = <0xf802 0x1>;
+						bits = <0 4>;
+					};
+
+					panic_count: panic-count@f802,4 {
+						reg = <0xf802 0x1>;
+						bits = <4 4>;
+					};
+
+					boot_error_stage: boot-error-stage@f803 {
+						reg = <0xf803 0x1>;
+					};
+
+					shutdown_flag: shutdown-flag@f80f,3 {
+						reg = <0xf80f 0x1>;
+						bits = <3 1>;
+					};
+				};
+			};
+		};
+
 		smc_mbox: mbox@38c608000 {
 			compatible = "apple,t8132-asc-mailbox", "apple,asc-mailbox-v4";
 			reg = <0x3 0x8c608000 0x0 0x4000>;
@@ -577,6 +639,20 @@
 
 			smc_hwmon: hwmon {
 				compatible = "apple,smc-hwmon";
+			};
+
+			smc_reboot: reboot {
+				compatible = "apple,smc-reboot";
+				nvmem-cells = <&shutdown_flag>, <&boot_stage>,
+					<&boot_error_count>, <&panic_count>;
+				nvmem-cell-names = "shutdown_flag", "boot_stage",
+					"boot_error_count", "panic_count";
+			};
+
+			rtc {
+				compatible = "apple,smc-rtc";
+				nvmem-cells = <&rtc_offset>;
+				nvmem-cell-names = "rtc_offset";
 			};
 		};
 
