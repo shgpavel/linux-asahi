@@ -173,3 +173,38 @@
 		ti,vmon-slot-no = <2>;
 	};
 };
+
+&mca {
+	status = "okay";
+};
+
+/ {
+	sound {
+		compatible = "apple,j773g-macaudio", "apple,j473-macaudio",
+			     "apple,macaudio";
+		model = "Mac mini J773g";
+
+		dai-link@0 {
+			link-name = "Speaker";
+
+			cpu {
+				sound-dai = <&mca 0>;
+			};
+			codec {
+				sound-dai = <&speaker_amp>;
+			};
+		};
+
+		dai-link@1 {
+			link-name = "Headphone Jack";
+
+			cpu {
+				sound-dai = <&mca 2>;
+			};
+			codec {
+				sound-dai = <&jack_codec>;
+			};
+		};
+	};
+};
+
