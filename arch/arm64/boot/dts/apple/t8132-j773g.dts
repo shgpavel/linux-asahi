@@ -132,3 +132,10 @@
 
 #include "hwmon-common.dtsi"
 #include "hwmon-mini.dtsi"
+
+&smc_hwmon {
+	temperature-TCMz {
+		apple,key-id = "TCMz";
+		label = "CPU Max Temperature";
+	};
+};
