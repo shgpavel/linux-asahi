@@ -99,3 +99,6 @@
 &framebuffer0 {
 	power-domains = <&ps_disp_cpu>, <&ps_dptx_phy>;
 };
+
+#include "hwmon-common.dtsi"
+#include "hwmon-mini.dtsi"
