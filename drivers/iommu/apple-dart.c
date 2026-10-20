@@ -235,6 +235,7 @@ struct apple_dart {
 	u32 supports_bypass : 1;
 	u32 four_level : 1;
 	u32 locked : 1;
+	u32 shared : 1;
 
 	dma_addr_t dma_min;
 	dma_addr_t dma_max;
@@ -719,8 +720,14 @@ apple_dart_setup_translation(struct apple_dart_domain *domain,
 		&io_pgtable_ops_to_pgtable(domain->pgtbl_ops)->cfg;
 
 	/* enable all streams globally since TCR is used to control isolation */
-	for (i = 0; i < BITS_TO_U32(dart->num_streams); i++)
-		writel(U32_MAX, dart->regs + dart->hw->enable_streams + 4 * i);
+	for (i = 0; i < BITS_TO_U32(dart->num_streams); i++) {
+		void __iomem *en = dart->regs + dart->hw->enable_streams + 4 * i;
+
+		if (dart->shared)
+			writel(readl(en) | bitmap_read(stream_map->sidmap, 32 * i, 32), en);
+		else
+			writel(U32_MAX, en);
+	}
 
 	for (i = 0; i < pgtbl_cfg->apple_dart_cfg.n_ttbrs; ++i) {
 		u64 ttbr = virt_to_phys(pgtbl_cfg->apple_dart_cfg.ttbr[i]);
@@ -1524,7 +1531,8 @@ static int apple_dart_probe(struct platform_device *pdev)
 	}
 
 	dart->locked = apple_dart_is_locked(dart);
-	if (!dart->locked) {
+	dart->shared = of_property_read_bool(dev->of_node, "apple,shared");
+	if (!dart->locked && !dart->shared) {
 		ret = apple_dart_hw_reset(dart);
 		if (ret)
 			goto err_clk_disable;
@@ -1570,7 +1578,7 @@ static void apple_dart_remove(struct platform_device *pdev)
 {
 	struct apple_dart *dart = platform_get_drvdata(pdev);
 
-	if (!dart->locked)
+	if (!dart->locked && !dart->shared)
 		apple_dart_hw_reset(dart);
 
 	free_irq(dart->irq, dart);
@@ -1715,7 +1723,7 @@ static __maybe_unused int apple_dart_resume(struct device *dev)
 	int ret;
 
 	/* Locked DARTs can't be restored, and they should not need it */
-	if (dart->locked)
+	if (dart->locked || dart->shared)
 		return 0;
 
 	ret = apple_dart_hw_reset(dart);
