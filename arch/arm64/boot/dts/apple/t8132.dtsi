@@ -707,6 +707,24 @@
 			apple,shared;
 		};
 
+		mca: i2s@393600000 {
+			compatible = "apple,t8132-mca";
+			reg = <0x3 0x93600000 0x0 0x9100>,
+			      <0x3 0x88240038 0x0 0x18>;
+			resets = <&ps_audio_p>;
+			power-domains = <&ps_audio_leap_mca>, <&ps_audio_mca0_m>,
+					<&ps_audio_mca1_m>, <&ps_audio_mca2_m>,
+					<&ps_audio_mca3_m>, <&ps_audio_mca4_m>,
+					<&ps_audio_mca5_m>;
+			dmas = <&admac 0>, <&admac 1>, <&admac 2>, <&admac 3>,
+			       <&admac 4>, <&admac 5>, <&admac 6>, <&admac 7>,
+			       <&admac 8>, <&admac 9>, <&admac 10>, <&admac 11>;
+			dma-names = "tx0", "rx0", "tx1", "rx1", "tx2", "rx2",
+				    "tx3", "rx3", "tx4", "rx4", "tx5", "rx5";
+			#sound-dai-cells = <1>;
+			status = "disabled";
+		};
+
 		admac: dma-controller@393800000 {
 			compatible = "apple,t8132-admac", "apple,t8122-admac";
 			reg = <0x3 0x93800000 0x0 0x34000>;
@@ -716,7 +734,7 @@
 					      <0>,
 					      <0>,
 					      <0>;
-			iommus = <&dart_aop 8 0x100 0x00008000 0x0 0xffff8000>;
+			iommus = <&dart_aop 8 0x0 0x00008000 0x0 0xffff8000>;
 			power-domains = <&ps_audio_base_ns_a>;
 			resets = <&ps_audio_p>;
 			status = "disabled";
