@@ -1123,4 +1123,208 @@
 		label = "atc3_usb";
 		power-domains = <&ps_atc3_common>, <&ps_atc3_usb_aon>;
 	};
+
+	ps_audio_a: power-controller@4020 {
+		compatible = "apple,t8132-pmgr-pwrstate", "apple,t8103-pmgr-pwrstate";
+		reg = <0x4020 4>;
+		#power-domain-cells = <0>;
+		#reset-cells = <0>;
+		label = "audio_a";
+	};
+
+	ps_audio_fr: power-controller@4090 {
+		compatible = "apple,t8132-pmgr-pwrstate", "apple,t8103-pmgr-pwrstate";
+		reg = <0x4090 4>;
+		#power-domain-cells = <0>;
+		#reset-cells = <0>;
+		label = "audio_fr";
+		power-domains = <&ps_audio_a>;
+	};
+
+	ps_audio_p: power-controller@40b8 {
+		compatible = "apple,t8132-pmgr-pwrstate", "apple,t8103-pmgr-pwrstate";
+		reg = <0x40b8 4>;
+		#power-domain-cells = <0>;
+		#reset-cells = <0>;
+		label = "audio_p";
+		power-domains = <&ps_audio_fr>;
+	};
+
+	ps_audio_leap_a: power-controller@40c0 {
+		compatible = "apple,t8132-pmgr-pwrstate", "apple,t8103-pmgr-pwrstate";
+		reg = <0x40c0 4>;
+		#power-domain-cells = <0>;
+		#reset-cells = <0>;
+		label = "audio_leap_a";
+		power-domains = <&ps_audio_fr>;
+	};
+
+	ps_audio_sense_pdmc: power-controller@40c8 {
+		compatible = "apple,t8132-pmgr-pwrstate", "apple,t8103-pmgr-pwrstate";
+		reg = <0x40c8 4>;
+		#power-domain-cells = <0>;
+		#reset-cells = <0>;
+		label = "audio_sense_pdmc";
+		power-domains = <&ps_audio_fr>;
+	};
+
+	ps_audio_base_ns_a: power-controller@40d8 {
+		compatible = "apple,t8132-pmgr-pwrstate", "apple,t8103-pmgr-pwrstate";
+		reg = <0x40d8 4>;
+		#power-domain-cells = <0>;
+		#reset-cells = <0>;
+		label = "audio_base_ns_a";
+		power-domains = <&ps_audio_p>;
+	};
+
+	ps_audio_leap_mca: power-controller@40e0 {
+		compatible = "apple,t8132-pmgr-pwrstate", "apple,t8103-pmgr-pwrstate";
+		reg = <0x40e0 4>;
+		#power-domain-cells = <0>;
+		#reset-cells = <0>;
+		label = "audio_leap_mca";
+		power-domains = <&ps_audio_p>;
+	};
+
+	ps_audio_mca0_m: power-controller@40e8 {
+		compatible = "apple,t8132-pmgr-pwrstate", "apple,t8103-pmgr-pwrstate";
+		reg = <0x40e8 4>;
+		#power-domain-cells = <0>;
+		#reset-cells = <0>;
+		label = "audio_mca0_m";
+		power-domains = <&ps_audio_p>;
+	};
+
+	ps_audio_mca1_m: power-controller@40f0 {
+		compatible = "apple,t8132-pmgr-pwrstate", "apple,t8103-pmgr-pwrstate";
+		reg = <0x40f0 4>;
+		#power-domain-cells = <0>;
+		#reset-cells = <0>;
+		label = "audio_mca1_m";
+		power-domains = <&ps_audio_p>;
+	};
+
+	ps_audio_mca2_m: power-controller@40f8 {
+		compatible = "apple,t8132-pmgr-pwrstate", "apple,t8103-pmgr-pwrstate";
+		reg = <0x40f8 4>;
+		#power-domain-cells = <0>;
+		#reset-cells = <0>;
+		label = "audio_mca2_m";
+		power-domains = <&ps_audio_p>;
+	};
+
+	ps_audio_mca3_m: power-controller@4100 {
+		compatible = "apple,t8132-pmgr-pwrstate", "apple,t8103-pmgr-pwrstate";
+		reg = <0x4100 4>;
+		#power-domain-cells = <0>;
+		#reset-cells = <0>;
+		label = "audio_mca3_m";
+		power-domains = <&ps_audio_p>;
+	};
+
+	ps_audio_mca4_m: power-controller@4108 {
+		compatible = "apple,t8132-pmgr-pwrstate", "apple,t8103-pmgr-pwrstate";
+		reg = <0x4108 4>;
+		#power-domain-cells = <0>;
+		#reset-cells = <0>;
+		label = "audio_mca4_m";
+		power-domains = <&ps_audio_p>;
+	};
+
+	ps_audio_mca5_m: power-controller@4110 {
+		compatible = "apple,t8132-pmgr-pwrstate", "apple,t8103-pmgr-pwrstate";
+		reg = <0x4110 4>;
+		#power-domain-cells = <0>;
+		#reset-cells = <0>;
+		label = "audio_mca5_m";
+		power-domains = <&ps_audio_p>;
+	};
+
+	ps_audio_leap_c: power-controller@4118 {
+		compatible = "apple,t8132-pmgr-pwrstate", "apple,t8103-pmgr-pwrstate";
+		reg = <0x4118 4>;
+		#power-domain-cells = <0>;
+		#reset-cells = <0>;
+		label = "audio_leap_c";
+		power-domains = <&ps_audio_leap_a>;
+	};
+
+	ps_audio_leap_ns_a: power-controller@4128 {
+		compatible = "apple,t8132-pmgr-pwrstate", "apple,t8103-pmgr-pwrstate";
+		reg = <0x4128 4>;
+		#power-domain-cells = <0>;
+		#reset-cells = <0>;
+		label = "audio_leap_ns_a";
+		power-domains = <&ps_audio_leap_c>;
+	};
+
+	ps_audio_leap_rx0: power-controller@4130 {
+		compatible = "apple,t8132-pmgr-pwrstate", "apple,t8103-pmgr-pwrstate";
+		reg = <0x4130 4>;
+		#power-domain-cells = <0>;
+		#reset-cells = <0>;
+		label = "audio_leap_rx0";
+		power-domains = <&ps_audio_leap_c>;
+	};
+
+	ps_audio_leap_rx1: power-controller@4138 {
+		compatible = "apple,t8132-pmgr-pwrstate", "apple,t8103-pmgr-pwrstate";
+		reg = <0x4138 4>;
+		#power-domain-cells = <0>;
+		#reset-cells = <0>;
+		label = "audio_leap_rx1";
+		power-domains = <&ps_audio_leap_c>;
+	};
+
+	ps_audio_leap_rx2: power-controller@4140 {
+		compatible = "apple,t8132-pmgr-pwrstate", "apple,t8103-pmgr-pwrstate";
+		reg = <0x4140 4>;
+		#power-domain-cells = <0>;
+		#reset-cells = <0>;
+		label = "audio_leap_rx2";
+		power-domains = <&ps_audio_leap_c>;
+	};
+
+	ps_audio_leap_rx3: power-controller@4148 {
+		compatible = "apple,t8132-pmgr-pwrstate", "apple,t8103-pmgr-pwrstate";
+		reg = <0x4148 4>;
+		#power-domain-cells = <0>;
+		#reset-cells = <0>;
+		label = "audio_leap_rx3";
+		power-domains = <&ps_audio_leap_c>;
+	};
+
+	ps_audio_leap_rx4: power-controller@4150 {
+		compatible = "apple,t8132-pmgr-pwrstate", "apple,t8103-pmgr-pwrstate";
+		reg = <0x4150 4>;
+		#power-domain-cells = <0>;
+		#reset-cells = <0>;
+		label = "audio_leap_rx4";
+		power-domains = <&ps_audio_leap_c>;
+	};
+
+	ps_audio_leap_tx0: power-controller@4158 {
+		compatible = "apple,t8132-pmgr-pwrstate", "apple,t8103-pmgr-pwrstate";
+		reg = <0x4158 4>;
+		#power-domain-cells = <0>;
+		#reset-cells = <0>;
+		label = "audio_leap_tx0";
+		power-domains = <&ps_audio_leap_c>;
+	};
+
+	ps_pdm0_audio_ref: power-controller@4160 {
+		compatible = "apple,t8132-pmgr-pwrstate", "apple,t8103-pmgr-pwrstate";
+		reg = <0x4160 4>;
+		#power-domain-cells = <0>;
+		#reset-cells = <0>;
+		label = "pdm0_audio_ref";
+	};
+
+	ps_pdm1_audio_ref: power-controller@4168 {
+		compatible = "apple,t8132-pmgr-pwrstate", "apple,t8103-pmgr-pwrstate";
+		reg = <0x4168 4>;
+		#power-domain-cells = <0>;
+		#reset-cells = <0>;
+		label = "pdm1_audio_ref";
+	};
 };

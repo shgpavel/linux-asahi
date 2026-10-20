@@ -516,7 +516,7 @@
 			compatible = "apple,t8132-pmgr", "apple,t8103-pmgr", "syscon", "simple-mfd";
 			#address-cells = <1>;
 			#size-cells = <1>;
-			reg = <0x3 0x88280000 0 0x4000>;
+			reg = <0x3 0x88280000 0 0x8000>;
 			/* child nodes are added in t8132-pmgr.dtsi */
 		};
 
@@ -696,6 +696,30 @@
 			             <AIC_IRQ 427 IRQ_TYPE_LEVEL_HIGH>,
 			             <AIC_IRQ 428 IRQ_TYPE_LEVEL_HIGH>,
 			             <AIC_IRQ 429 IRQ_TYPE_LEVEL_HIGH>;
+		};
+
+		dart_aop: iommu@390f00000 {
+			compatible = "apple,t8132-dart", "apple,t8110-dart";
+			reg = <0x3 0x90f00000 0x0 0x4000>;
+			#iommu-cells = <5>;
+			interrupt-parent = <&aic>;
+			interrupts = <AIC_IRQ 457 IRQ_TYPE_LEVEL_HIGH>;
+			apple,shared;
+		};
+
+		admac: dma-controller@393800000 {
+			compatible = "apple,t8132-admac", "apple,t8122-admac";
+			reg = <0x3 0x93800000 0x0 0x34000>;
+			#dma-cells = <1>;
+			dma-channels = <26>;
+			interrupts-extended = <&aic AIC_IRQ 475 IRQ_TYPE_LEVEL_HIGH>,
+					      <0>,
+					      <0>,
+					      <0>;
+			iommus = <&dart_aop 8 0x100 0x00008000 0x0 0xffff8000>;
+			power-domains = <&ps_audio_base_ns_a>;
+			resets = <&ps_audio_p>;
+			status = "disabled";
 		};
 
 		pinctrl_ap: pinctrl@39a000000 {
