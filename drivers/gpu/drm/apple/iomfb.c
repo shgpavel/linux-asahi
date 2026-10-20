@@ -570,6 +570,7 @@ void iomfb_shutdown(struct apple_dcp *dcp)
 		iomfb_shutdown_v14_7_0(dcp);
 		break;
 	case DCP_FIRMWARE_V_27_0:
+		hrtimer_cancel(&dcp->iboot_vblank_timer);
 		break;
 	default:
 		WARN_ONCE(true, "Unexpected firmware version: %u\n", dcp->fw_compat);

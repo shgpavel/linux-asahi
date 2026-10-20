@@ -3,6 +3,7 @@
 
 #include <linux/completion.h>
 #include <linux/delay.h>
+#include <linux/hrtimer.h>
 #include <linux/slab.h>
 #include <linux/workqueue.h>
 
@@ -373,6 +374,30 @@ static int iboot_surface_fmt(u32 drm_fmt)
 	}
 }
 
+static enum hrtimer_restart iboot_vblank(struct hrtimer *timer)
+{
+	struct apple_dcp *dcp = container_of(timer, struct apple_dcp,
+					     iboot_vblank_timer);
+
+	dcp->iboot_last_vblank = ktime_get();
+	dcp_drm_crtc_vblank(dcp->crtc);
+	return HRTIMER_NORESTART;
+}
+
+static void iboot_queue_vblank(struct apple_dcp *dcp, struct drm_crtc *crtc)
+{
+	int refresh = drm_mode_vrefresh(&crtc->state->mode);
+	ktime_t now = ktime_get(), next;
+
+	if (refresh <= 0)
+		refresh = 60;
+	next = ktime_add_ns(dcp->iboot_last_vblank, NSEC_PER_SEC / refresh);
+	if (ktime_before(next, now))
+		next = now;
+
+	hrtimer_start(&dcp->iboot_vblank_timer, next, HRTIMER_MODE_ABS);
+}
+
 void iboot_flush(struct apple_dcp *dcp, struct drm_crtc *crtc,
 		 struct drm_atomic_commit *commit)
 {
@@ -404,7 +429,7 @@ void iboot_flush(struct apple_dcp *dcp, struct drm_crtc *crtc,
 		}
 	}
 
-	schedule_work(&dcp->vblank_wq);
+	iboot_queue_vblank(dcp, crtc);
 }
 
 void iboot_poweron(struct apple_dcp *dcp)
@@ -449,6 +474,8 @@ int ibootep_init(struct apple_dcp *dcp)
 	init_completion(&dcp->iboot_ready);
 	mutex_init(&dcp->iboot_mutex);
 	INIT_DELAYED_WORK(&dcp->iboot_hpd_work, iboot_hpd_work);
+	hrtimer_setup(&dcp->iboot_vblank_timer, iboot_vblank, CLOCK_MONOTONIC,
+		      HRTIMER_MODE_ABS);
 
 	dcp->ibootep = afk_init(dcp, DISP0_ENDPOINT, ibootep_ops);
 	afk_start(dcp->ibootep);

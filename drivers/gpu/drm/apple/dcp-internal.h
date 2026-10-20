@@ -6,6 +6,7 @@
 
 #include <linux/backlight.h>
 #include <linux/device.h>
+#include <linux/hrtimer.h>
 #include <linux/ioport.h>
 #include <linux/mutex.h>
 #include <linux/mux/consumer.h>
@@ -245,6 +246,8 @@ struct apple_dcp {
 	unsigned int iboot_nr_tmodes;
 	struct iboot_color_mode iboot_cmode;
 	unsigned int iboot_hpd_tries;
+	struct hrtimer iboot_vblank_timer;
+	ktime_t iboot_last_vblank;
 	struct apple_dcp_afkep *dcpavservep;
 	struct dcpavserv dcpavserv;
 
