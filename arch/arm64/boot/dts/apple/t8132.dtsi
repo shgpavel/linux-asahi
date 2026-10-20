@@ -65,6 +65,9 @@
 			reg = <0x0 0x0>;
 			enable-method = "spin-table";
 			cpu-release-addr = <0 0>;
+			operating-points-v2 = <&donan_e_opp>;
+			capacity-dmips-mhz = <587>;
+			performance-domains = <&cpufreq_e>;
 			next-level-cache = <&l2_cache_0>;
 		};
 
@@ -74,6 +77,9 @@
 			reg = <0x0 0x1>;
 			enable-method = "spin-table";
 			cpu-release-addr = <0 0>;
+			operating-points-v2 = <&donan_e_opp>;
+			capacity-dmips-mhz = <587>;
+			performance-domains = <&cpufreq_e>;
 			next-level-cache = <&l2_cache_0>;
 		};
 
@@ -83,6 +89,9 @@
 			reg = <0x0 0x2>;
 			enable-method = "spin-table";
 			cpu-release-addr = <0 0>;
+			operating-points-v2 = <&donan_e_opp>;
+			capacity-dmips-mhz = <587>;
+			performance-domains = <&cpufreq_e>;
 			next-level-cache = <&l2_cache_0>;
 		};
 
@@ -92,6 +101,9 @@
 			reg = <0x0 0x3>;
 			enable-method = "spin-table";
 			cpu-release-addr = <0 0>;
+			operating-points-v2 = <&donan_e_opp>;
+			capacity-dmips-mhz = <587>;
+			performance-domains = <&cpufreq_e>;
 			next-level-cache = <&l2_cache_0>;
 		};
 
@@ -101,6 +113,9 @@
 			reg = <0x0 0x4>;
 			enable-method = "spin-table";
 			cpu-release-addr = <0 0>;
+			operating-points-v2 = <&donan_e_opp>;
+			capacity-dmips-mhz = <587>;
+			performance-domains = <&cpufreq_e>;
 			next-level-cache = <&l2_cache_0>;
 		};
 
@@ -110,6 +125,9 @@
 			reg = <0x0 0x5>;
 			enable-method = "spin-table";
 			cpu-release-addr = <0 0>;
+			operating-points-v2 = <&donan_e_opp>;
+			capacity-dmips-mhz = <587>;
+			performance-domains = <&cpufreq_e>;
 			next-level-cache = <&l2_cache_0>;
 		};
 
@@ -119,6 +137,9 @@
 			reg = <0x0 0x10100>;
 			enable-method = "spin-table";
 			cpu-release-addr = <0 0>;
+			operating-points-v2 = <&donan_p_opp>;
+			capacity-dmips-mhz = <1024>;
+			performance-domains = <&cpufreq_p>;
 			next-level-cache = <&l2_cache_1>;
 		};
 
@@ -128,6 +149,9 @@
 			reg = <0x0 0x10101>;
 			enable-method = "spin-table";
 			cpu-release-addr = <0 0>;
+			operating-points-v2 = <&donan_p_opp>;
+			capacity-dmips-mhz = <1024>;
+			performance-domains = <&cpufreq_p>;
 			next-level-cache = <&l2_cache_1>;
 		};
 
@@ -137,6 +161,9 @@
 			reg = <0x0 0x10102>;
 			enable-method = "spin-table";
 			cpu-release-addr = <0 0>;
+			operating-points-v2 = <&donan_p_opp>;
+			capacity-dmips-mhz = <1024>;
+			performance-domains = <&cpufreq_p>;
 			next-level-cache = <&l2_cache_1>;
 		};
 
@@ -146,6 +173,9 @@
 			reg = <0x0 0x10103>;
 			enable-method = "spin-table";
 			cpu-release-addr = <0 0>;
+			operating-points-v2 = <&donan_p_opp>;
+			capacity-dmips-mhz = <1024>;
+			performance-domains = <&cpufreq_p>;
 			next-level-cache = <&l2_cache_1>;
 		};
 
@@ -161,6 +191,184 @@
 			cache-level = <2>;
 			cache-unified;
 			cache-size = <0x1000000>;
+		};
+	};
+
+	donan_e_opp: opp-table-0 {
+		compatible = "operating-points-v2";
+		opp-shared;
+
+		opp01 {
+			opp-hz = /bits/ 64 <900000000>;
+			opp-level = <1>;
+			clock-latency-ns = <10500>;
+		};
+
+		opp02 {
+			opp-hz = /bits/ 64 <1080000000>;
+			opp-level = <2>;
+			clock-latency-ns = <27000>;
+		};
+
+		opp03 {
+			opp-hz = /bits/ 64 <1476000000>;
+			opp-level = <3>;
+			clock-latency-ns = <32400>;
+		};
+
+		opp04 {
+			opp-hz = /bits/ 64 <1860000000>;
+			opp-level = <4>;
+			clock-latency-ns = <38900>;
+		};
+
+		opp05 {
+			opp-hz = /bits/ 64 <2172000000>;
+			opp-level = <5>;
+			clock-latency-ns = <47700>;
+		};
+
+		opp06 {
+			opp-hz = /bits/ 64 <2496000000>;
+			opp-level = <6>;
+			clock-latency-ns = <61300>;
+		};
+
+		opp07 {
+			opp-hz = /bits/ 64 <2808000000>;
+			opp-level = <7>;
+			clock-latency-ns = <68500>;
+		};
+
+		opp08 {
+			opp-hz = /bits/ 64 <2892000000>;
+			opp-level = <8>;
+			clock-latency-ns = <68000>;
+		};
+	};
+
+	donan_p_opp: opp-table-1 {
+		compatible = "operating-points-v2";
+		opp-shared;
+
+		opp01 {
+			opp-hz = /bits/ 64 <912000000>;
+			opp-level = <1>;
+			clock-latency-ns = <600>;
+		};
+
+		opp02 {
+			opp-hz = /bits/ 64 <1260000000>;
+			opp-level = <2>;
+			clock-latency-ns = <17900>;
+		};
+
+		opp03 {
+			opp-hz = /bits/ 64 <1512000000>;
+			opp-level = <3>;
+			clock-latency-ns = <19600>;
+		};
+
+		opp04 {
+			opp-hz = /bits/ 64 <1800000000>;
+			opp-level = <4>;
+			clock-latency-ns = <25400>;
+		};
+
+		opp05 {
+			opp-hz = /bits/ 64 <2088000000>;
+			opp-level = <5>;
+			clock-latency-ns = <31200>;
+		};
+
+		opp06 {
+			opp-hz = /bits/ 64 <2352000000>;
+			opp-level = <6>;
+			clock-latency-ns = <35900>;
+		};
+
+		opp07 {
+			opp-hz = /bits/ 64 <2616000000>;
+			opp-level = <7>;
+			clock-latency-ns = <39300>;
+		};
+
+		opp08 {
+			opp-hz = /bits/ 64 <2868000000>;
+			opp-level = <8>;
+			clock-latency-ns = <44700>;
+		};
+
+		opp09 {
+			opp-hz = /bits/ 64 <3096000000>;
+			opp-level = <9>;
+			clock-latency-ns = <47500>;
+		};
+
+		opp10 {
+			opp-hz = /bits/ 64 <3300000000>;
+			opp-level = <10>;
+			clock-latency-ns = <50100>;
+		};
+
+		opp11 {
+			opp-hz = /bits/ 64 <3468000000>;
+			opp-level = <11>;
+			clock-latency-ns = <50400>;
+		};
+
+		opp12 {
+			opp-hz = /bits/ 64 <3624000000>;
+			opp-level = <12>;
+			clock-latency-ns = <51600>;
+		};
+
+		opp13 {
+			opp-hz = /bits/ 64 <3756000000>;
+			opp-level = <13>;
+			clock-latency-ns = <54100>;
+		};
+
+		opp14 {
+			opp-hz = /bits/ 64 <3876000000>;
+			opp-level = <14>;
+			clock-latency-ns = <57500>;
+		};
+
+		opp15 {
+			opp-hz = /bits/ 64 <3936000000>;
+			opp-level = <15>;
+			clock-latency-ns = <57800>;
+		};
+
+		opp16 {
+			opp-hz = /bits/ 64 <3984000000>;
+			opp-level = <16>;
+			clock-latency-ns = <57700>;
+		};
+
+		opp17 {
+			opp-hz = /bits/ 64 <4044000000>;
+			opp-level = <17>;
+			clock-latency-ns = <58100>;
+		};
+
+		opp18 {
+			opp-hz = /bits/ 64 <4104000000>;
+			opp-level = <18>;
+			clock-latency-ns = <58100>;
+		};
+
+		opp19 {
+			opp-hz = /bits/ 64 <4416000000>;
+			opp-level = <19>;
+			clock-latency-ns = <64300>;
+		};
+
+		opp20 {
+			opp-hz = /bits/ 64 <4464000000>;
+			opp-level = <20>;
+			clock-latency-ns = <64900>;
 		};
 	};
 
@@ -197,6 +405,18 @@
 		nonposted-mmio;
 		/* Required to get >32-bit DMA via DARTs */
 		dma-ranges = <0 0 0 0 0xffffffff 0xffffc000>;
+
+		cpufreq_e: cpufreq@210e20000 {
+			compatible = "apple,t8132-cluster-cpufreq", "apple,t8112-cluster-cpufreq";
+			reg = <0x2 0x10e20000 0 0x1000>;
+			#performance-domain-cells = <0>;
+		};
+
+		cpufreq_p: cpufreq@211e20000 {
+			compatible = "apple,t8132-cluster-cpufreq", "apple,t8112-cluster-cpufreq";
+			reg = <0x2 0x11e20000 0 0x1000>;
+			#performance-domain-cells = <0>;
+		};
 
 		disp0_dart: iommu@30a300000 {
 			compatible = "apple,t8132-dart", "apple,t8110-dart";
