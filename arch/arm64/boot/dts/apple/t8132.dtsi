@@ -921,6 +921,7 @@
 			port00: pci@0,0 {
 				device_type = "pci";
 				reg = <0x0 0x0 0x0 0x0 0x0>;
+				reset-gpios = <&pinctrl_ap 163 GPIO_ACTIVE_LOW>;
 				status = "disabled";
 
 				#address-cells = <3>;
