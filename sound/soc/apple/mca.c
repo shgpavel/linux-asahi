@@ -867,7 +867,8 @@ clocks:
 			       cl->syncgen + REG_SYNCGEN_LO_PERIOD);
 
 		if (mca->t8132) {
-			ret = mca_t8132_set_mclk(cl, bclk_ratio * samp_rate);
+			if (cl->clk_provider)
+				ret = mca_t8132_set_mclk(cl, bclk_ratio * samp_rate);
 		} else {
 			writel_relaxed(FIELD_PREP(MCLK_CONF_DIV, 0x1),
 				       cl->base + REG_MCLK_CONF);
