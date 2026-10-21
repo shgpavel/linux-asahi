@@ -81,6 +81,7 @@ struct macaudio_platform_cfg {
 	bool stereo;
 	int amp_gain;
 	int safe_vol;
+	int max_vol;
 };
 
 static const char *volume_control_names[] = {
@@ -1214,6 +1215,16 @@ static int macaudio_late_probe(struct snd_soc_card *card)
 		mutex_unlock(&ma->volume_lock_mutex);
 	}
 
+	/* Fixed ceiling for speakers that run without sense or a daemon */
+	if (ma->has_speakers && ma->cfg->max_vol) {
+		if (WARN_ON(ma->cfg->amp != AMP_SN012776))
+			return -EINVAL;
+		ret = snd_soc_limit_volume(card, volume_control_names[ma->cfg->amp],
+					   SN012776_DB(ma->cfg->max_vol));
+		if (ret < 0)
+			return ret;
+	}
+
 	return 0;
 }
 
@@ -1540,7 +1551,7 @@ static const struct snd_soc_dapm_route macaudio_dapm_routes[] = {
 	{ "PCM2 RX", NULL, "Speaker Sense Capture" },
 };
 
-/*	enable	amp		speakers	stereo	gain	safe_vol */
+/*	enable	amp		speakers	stereo	gain	safe_vol	max_vol */
 struct macaudio_platform_cfg macaudio_j180_cfg = {
 	false,	AMP_SN012776,	SPKR_1W1T,	false,	10,	-20,
 };
@@ -1582,6 +1593,16 @@ struct macaudio_platform_cfg macaudio_j45x_cfg = {
 
 struct macaudio_platform_cfg macaudio_j493_cfg = {
 	true,	AMP_SN012776,	SPKR_2W,	true,	15,	-20,
+};
+
+/*
+ * macOS runs this speaker without I/V sense, from a feed-forward thermal
+ * model (AID36: 4.6 ohm, 40 + 60 C/W, 140 C limit, 50 C ambient). At amp
+ * gain 15 (18.5 dBV) a -17 dB ceiling keeps even a full-scale square wave
+ * under 0.7 W, i.e. at most 120 C on the coil.
+ */
+struct macaudio_platform_cfg macaudio_j773g_cfg = {
+	true,	AMP_SN012776,	SPKR_1W,	false,	15,	0,	-17,
 };
 
 struct macaudio_platform_cfg macaudio_fallback_cfg = {
@@ -1643,6 +1664,8 @@ static const struct of_device_id macaudio_snd_device_id[]  = {
 	/* j575    AID33   sn012776    15      1x 1W    Compat: apple,j375-macaudio */
 	/* j613    AID20   sn012776    15      2x 1W+1T Compat: apple,j413-macaudio */
 	/* j615    AID21   sn012776    15      2x 2W+1T Compat: apple,j415-macaudio */
+	/* j773g   AID36   sn012776    15      1x 1W */
+	{ .compatible = "apple,j773g-macaudio", .data = &macaudio_j773g_cfg },
 	/* Fallback, jack only */
 	{ .compatible = "apple,macaudio"},
 	{ }
