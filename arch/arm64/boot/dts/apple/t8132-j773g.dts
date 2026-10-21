@@ -180,8 +180,7 @@
 
 / {
 	sound {
-		compatible = "apple,j773g-macaudio", "apple,j473-macaudio",
-			     "apple,macaudio";
+		compatible = "apple,j773g-macaudio", "apple,macaudio";
 		model = "Mac mini J773g";
 
 		dai-link@0 {
