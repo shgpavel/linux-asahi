@@ -1,0 +1,161 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/gpu/apple,agx-t8132.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Apple T8132 GPU
+
+maintainers:
+  - Pavel Shago <pavel@shago.dev>
+
+description:
+  The G16G GPU of the Apple M4. Its firmware is loaded by iBoot. The boot
+  loader passes on where it and its MMU state are, and copies the properties
+  of the Apple device tree's sgx node that the OS needs, unconverted.
+
+properties:
+  compatible:
+    const: apple,agx-t8132
+
+  reg:
+    items:
+      - description: GPU coprocessor control registers
+      - description: GPU block MMIO registers
+
+  reg-names:
+    items:
+      - const: asc
+      - const: sgx
+
+  mboxes:
+    maxItems: 1
+
+  power-domains:
+    maxItems: 1
+
+  memory-region:
+    items:
+      - description: GPU MMU table of translation table bases
+      - description: GPU MMU page tables shared with the firmware
+      - description: Shared level 2 page table
+      - description: GPU MMU handoff page
+      - description: Firmware text
+      - description: Firmware data
+      - description: Firmware data shared read-only
+
+  memory-region-names:
+    items:
+      - const: ttbs
+      - const: pagetables
+      - const: l2
+      - const: handoff
+      - const: fw-text
+      - const: fw-data
+      - const: fw-shared-ro
+
+  apple,core-mask:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    description: Enabled GPU cores.
+    minimum: 1
+    maximum: 0x3ff
+
+  apple,max-power-microwatt:
+    description: GPU power limit given to the firmware.
+
+  apple,thermal-sensor-mask:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    description: Sensors in the GPU metrology chain.
+
+  apple,fast-die-sensor-mask:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    description: Subset of the sensors used by the fast die controller.
+
+  apple,relative-power-high:
+    $ref: /schemas/types.yaml#/definitions/uint32-array
+    description:
+      Percent of maximum power per voltage step, off first, at the highest
+      frequency of the step.
+    minItems: 2
+    maxItems: 16
+
+  apple,relative-power-low:
+    $ref: /schemas/types.yaml#/definitions/uint32-array
+    description:
+      Percent of maximum power per voltage step, off first, at the lowest
+      frequency of the step.
+    minItems: 2
+    maxItems: 16
+
+  apple,chip-revision:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    description: Set by the boot loader.
+
+  apple,firmware-uuid:
+    $ref: /schemas/types.yaml#/definitions/string
+    description:
+      UUID of the GPU firmware image iBoot loaded. It selects the firmware
+      ABI. Set by the boot loader.
+
+  apple,firmware-build:
+    $ref: /schemas/types.yaml#/definitions/string
+    description: iBoot build of the firmware set. Set by the boot loader.
+
+  apple,rtkit-private-vm-region:
+    $ref: /schemas/types.yaml#/definitions/uint64-array
+    description: Firmware private VM base and size. Set by the boot loader.
+    items:
+      - description: base
+      - description: size
+
+patternProperties:
+  "^apple,sgx-[a-zA-Z0-9-]+$":
+    $ref: /schemas/types.yaml#/definitions/uint8-array
+    description:
+      Raw copy of the property of the same name of the Apple device tree's
+      sgx node, in its little-endian encoding. Set by the boot loader.
+
+required:
+  - compatible
+  - reg
+  - reg-names
+  - mboxes
+  - power-domains
+  - memory-region
+  - memory-region-names
+  - apple,core-mask
+  - apple,max-power-microwatt
+  - apple,thermal-sensor-mask
+  - apple,fast-die-sensor-mask
+  - apple,relative-power-high
+  - apple,relative-power-low
+
+additionalProperties: false
+
+examples:
+  - |
+    soc {
+        #address-cells = <2>;
+        #size-cells = <2>;
+
+        gpu@302600000 {
+            compatible = "apple,agx-t8132";
+            reg = <0x3 0x02600000 0x0 0x88000>,
+                  <0x3 0x00000000 0x0 0x4000000>;
+            reg-names = "asc", "sgx";
+            mboxes = <&agx_mbox>;
+            power-domains = <&ps_gfx>;
+            memory-region = <&uat_ttbs>, <&uat_pagetables>, <&uat_l2>,
+                            <&uat_handoff>, <&gpu_fw_text>, <&gpu_fw_data>,
+                            <&gpu_fw_shared_ro>;
+            memory-region-names = "ttbs", "pagetables", "l2", "handoff",
+                                  "fw-text", "fw-data", "fw-shared-ro";
+            apple,core-mask = <0x3ff>;
+            apple,max-power-microwatt = <37237000>;
+            apple,thermal-sensor-mask = <0x6b79>;
+            apple,fast-die-sensor-mask = <0x6958>;
+            apple,relative-power-high = <0 50 100>;
+            apple,relative-power-low = <0 25 100>;
+        };
+    };
+...
