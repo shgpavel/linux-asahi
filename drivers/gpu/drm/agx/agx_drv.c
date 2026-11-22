@@ -131,8 +131,8 @@ static int agx_probe(struct platform_device *pdev)
 	if (!id || id == U32_MAX)
 		return dev_err_probe(dev, -ENODEV, "invalid GPU ID %#x\n", id);
 
-	dev_info(dev, "GPU %#x, firmware %s, %u states up to %u MHz; not started\n",
-		 id, adev->fw->name, adev->board.nr_states,
+	dev_info(dev, "GPU %#x, ASC control %#x status %#x, firmware %s, %u states up to %u MHz; not started\n",
+		 id, control, status, adev->fw->name, adev->board.nr_states,
 		 adev->board.freq_high[agx_board_top_state(&adev->board)]);
 	return 0;
 }
