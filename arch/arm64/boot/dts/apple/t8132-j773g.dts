@@ -11,6 +11,7 @@
 
 #include "t8132.dtsi"
 #include "t8132-jxxx.dtsi"
+#include "t8132-gpu.dtsi"
 
 / {
 	compatible = "apple,j773g", "apple,t8132", "apple,arm-platform";
@@ -488,3 +489,23 @@
 	};
 };
 
+
+/*
+ * Board inputs of the GPU firmware's power tables that the ADT does not
+ * carry, as Gravity Linux observed them on this board: relative power per
+ * voltage step (off first) at its highest and lowest frequency, the power
+ * limit and the metrology sensors.
+ */
+&gpu {
+	apple,core-mask = <0x3ff>;
+	apple,max-power-microwatt = <37237000>;
+	apple,thermal-sensor-mask = <0x6b79>;
+	apple,fast-die-sensor-mask = <0x6958>;
+	apple,relative-power-high = <0 8 14 21 27 36 44 54 60 79 100>;
+	apple,relative-power-low = <0 0 0 0 16 33 47 61 69 86 100>;
+};
+
+/* Once the GPU firmware runs, GFX must outlive a failed probe and suspend. */
+&ps_gfx {
+	apple,always-on;
+};

@@ -1,0 +1,83 @@
+// SPDX-License-Identifier: GPL-2.0+ OR MIT
+/*
+ * Apple T8132 "M4" GPU
+ *
+ * The boot loader fills in the firmware regions and per-boot properties
+ * and enables the GPU node. The regions are outside the OS's memory and
+ * must not be added to it, hence no-map.
+ */
+
+/ {
+	aliases {
+		gpu = &gpu;
+	};
+
+	reserved-memory {
+		uat_ttbs: uat-ttbs {
+			no-map;
+			status = "disabled";
+		};
+
+		uat_pagetables: uat-pagetables {
+			no-map;
+			status = "disabled";
+		};
+
+		uat_l2: uat-l2 {
+			no-map;
+			status = "disabled";
+		};
+
+		uat_handoff: uat-handoff {
+			no-map;
+			status = "disabled";
+		};
+
+		gpu_fw_text: gpu-fw-text {
+			no-map;
+			status = "disabled";
+		};
+
+		gpu_fw_data: gpu-fw-data {
+			no-map;
+			status = "disabled";
+		};
+
+		gpu_fw_shared_ro: gpu-fw-shared-ro {
+			no-map;
+			status = "disabled";
+		};
+	};
+};
+
+&soc {
+	gpu: gpu@302600000 {
+		compatible = "apple,agx-t8132";
+		reg = <0x3 0x02600000 0x0 0x88000>,
+		      <0x3 0x00000000 0x0 0x4000000>;
+		reg-names = "asc", "sgx";
+		mboxes = <&agx_mbox>;
+		power-domains = <&ps_gfx>;
+		memory-region = <&uat_ttbs>, <&uat_pagetables>, <&uat_l2>,
+				<&uat_handoff>, <&gpu_fw_text>, <&gpu_fw_data>,
+				<&gpu_fw_shared_ro>;
+		memory-region-names = "ttbs", "pagetables", "l2", "handoff",
+				      "fw-text", "fw-data", "fw-shared-ro";
+		status = "disabled";
+	};
+
+	agx_mbox: mailbox@302608000 {
+		compatible = "apple,t8103-asc-mailbox", "apple,asc-mailbox-v4";
+		reg = <0x3 0x02608000 0x0 0x4000>;
+		interrupt-parent = <&aic>;
+		/* The ADT lists each pair as not-empty, empty. */
+		interrupts = <AIC_IRQ 993 IRQ_TYPE_LEVEL_HIGH>,
+			     <AIC_IRQ 994 IRQ_TYPE_LEVEL_HIGH>,
+			     <AIC_IRQ 995 IRQ_TYPE_LEVEL_HIGH>,
+			     <AIC_IRQ 996 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-names = "send-empty", "send-not-empty",
+				  "recv-empty", "recv-not-empty";
+		#mbox-cells = <0>;
+		power-domains = <&ps_gfx>;
+	};
+};
