@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config DRM_AGX
+	tristate "Apple AGX G16 GPU"
+	depends on DRM
+	depends on (ARM64 && ARCH_APPLE && ARM64_16K_PAGES) || COMPILE_TEST
+	depends on OF && OF_RESERVED_MEM
+	help
+	  C driver for the GPU of the Apple M4 (T8132, G16G) with the GPU
+	  firmware of macOS 27.0.1.
+
+	  So far it validates what the boot loader hands over and identifies
+	  the hardware. It does not start the GPU firmware or register a DRM
+	  device.
+
+	  If M is selected, the module will be called agx.
