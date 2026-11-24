@@ -991,6 +991,7 @@ static_assert(sizeof(struct fw27_compute_msq) == 0x300);
 
 int fw27_windows(const struct agx_board *board, u64 base, struct agx_window *out);
 void fw27_handoff(void *page);
+bool fw27_handoff_ready(const void *page, u64 *receipt);
 int fw27_graph(const struct agx_board *board, const struct agx_graph_va *va, u32 entropy,
 	       const struct agx_graph_mem *mem);
 void fw27_map_notify(void *status_b, u64 state, u64 ring);

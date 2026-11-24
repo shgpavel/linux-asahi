@@ -6,30 +6,22 @@
 #include <linux/of_reserved_mem.h>
 #include <linux/platform_device.h>
 #include <linux/sizes.h>
+#include <linux/string.h>
 
 #include "agx_board.h"
+#include "agx_device.h"
 #include "agx_fw.h"
 
-#define AGX_ASC_CPU_CONTROL	0x44
-#define AGX_ASC_CPU_RUN		BIT(4)
-#define AGX_ASC_CPU_STATUS	0x48
 #define AGX_ASC_STATUS_MASK	GENMASK(1, 0)
 #define AGX_ASC_STATUS_COLD	2
 #define AGX_SGX_ID		0xd04000
 #define AGX_REGION_ALIGN	SZ_16K
 
-enum agx_region {
-	AGX_REGION_TTBS,
-	AGX_REGION_PAGETABLES,
-	AGX_REGION_L2,
-	AGX_REGION_HANDOFF,
-	AGX_REGION_FW_TEXT,
-	AGX_REGION_FW_DATA,
-	AGX_REGION_FW_SHARED_RO,
-	AGX_NR_REGIONS,
-};
+static char *stop_at = "probe";
+module_param(stop_at, charp, 0444);
+MODULE_PARM_DESC(stop_at, "probe: identify the GPU only; transport: start the firmware and stop after RTKit");
 
-static const char * const agx_region_names[AGX_NR_REGIONS] = {
+const char * const agx_region_names[AGX_NR_REGIONS] = {
 	[AGX_REGION_TTBS] = "ttbs",
 	[AGX_REGION_PAGETABLES] = "pagetables",
 	[AGX_REGION_L2] = "l2",
@@ -37,15 +29,6 @@ static const char * const agx_region_names[AGX_NR_REGIONS] = {
 	[AGX_REGION_FW_TEXT] = "fw-text",
 	[AGX_REGION_FW_DATA] = "fw-data",
 	[AGX_REGION_FW_SHARED_RO] = "fw-shared-ro",
-};
-
-struct agx_device {
-	struct device *dev;
-	const struct agx_fw *fw;
-	struct agx_board board;
-	struct resource region[AGX_NR_REGIONS];
-	void __iomem *asc;
-	void __iomem *sgx;
 };
 
 static const void *agx_of_prop(const void *ctx, const char *name, int *len)
@@ -84,6 +67,7 @@ static int agx_probe(struct platform_device *pdev)
 	struct resource *asc, *sgx;
 	const char *reason;
 	u32 control, status, id;
+	bool start;
 	int ret;
 
 	adev = devm_kzalloc(dev, sizeof(*adev), GFP_KERNEL);
@@ -127,14 +111,21 @@ static int agx_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, -EBUSY, "ASC is not cold: control %#x status %#x\n",
 				     control, status);
 
+	adev->asc_control = control;
+
 	id = readl(adev->sgx + AGX_SGX_ID);
 	if (!id || id == U32_MAX)
 		return dev_err_probe(dev, -ENODEV, "invalid GPU ID %#x\n", id);
 
-	dev_info(dev, "GPU %#x, ASC control %#x status %#x, firmware %s, %u states up to %u MHz; not started\n",
+	start = sysfs_streq(stop_at, "transport");
+	if (!start && !sysfs_streq(stop_at, "probe"))
+		return dev_err_probe(dev, -EINVAL, "unknown stop_at %s\n", stop_at);
+
+	dev_info(dev, "GPU %#x, ASC control %#x status %#x, firmware %s, %u states up to %u MHz; %s\n",
 		 id, control, status, adev->fw->name, adev->board.nr_states,
-		 adev->board.freq_high[agx_board_top_state(&adev->board)]);
-	return 0;
+		 adev->board.freq_high[agx_board_top_state(&adev->board)],
+		 start ? "starting" : "not started");
+	return start ? agx_boot(adev) : 0;
 }
 
 static const struct of_device_id agx_of_match[] = {
@@ -148,6 +139,7 @@ static struct platform_driver agx_driver = {
 	.driver = {
 		.name = "apple-agx",
 		.of_match_table = agx_of_match,
+		.suppress_bind_attrs = true,
 	},
 };
 module_platform_driver(agx_driver);

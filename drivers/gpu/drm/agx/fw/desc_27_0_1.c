@@ -53,6 +53,7 @@ static const struct agx_fw_sizes fw27_sizes = {
 static const struct agx_fw_ops fw27_ops = {
 	.windows = fw27_windows,
 	.handoff = fw27_handoff,
+	.handoff_ready = fw27_handoff_ready,
 	.graph = fw27_graph,
 	.map_notify = fw27_map_notify,
 	.init_message = fw27_init_message,

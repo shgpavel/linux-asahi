@@ -155,6 +155,7 @@ struct agx_flist_va {
 struct agx_fw_ops {
 	int (*windows)(const struct agx_board *board, u64 base, struct agx_window *out);
 	void (*handoff)(void *page);
+	bool (*handoff_ready)(const void *page, u64 *receipt);
 	int (*graph)(const struct agx_board *board, const struct agx_graph_va *va,
 		     u32 entropy, const struct agx_graph_mem *mem);
 	void (*map_notify)(void *status_b, u64 state, u64 ring);

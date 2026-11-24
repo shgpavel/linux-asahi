@@ -99,6 +99,14 @@ void fw27_handoff(void *page)
 	h->unk_638 = 1;
 }
 
+bool fw27_handoff_ready(const void *page, u64 *receipt)
+{
+	const struct fw27_handoff *h = page;
+
+	*receipt = le64_to_cpu(h->magic_fw);
+	return *receipt == FW27_HANDOFF_MAGIC;
+}
+
 static void fw27_root(struct fw27_root *r, const struct agx_graph_va *va)
 {
 	static const struct {

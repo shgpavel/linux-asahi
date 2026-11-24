@@ -2,6 +2,7 @@
 
 agx-y := \
 	agx_drv.o \
+	agx_boot.o \
 	agx_board.o \
 	fw/desc_27_0_1.o \
 	fw/graph_27_0_1.o \
