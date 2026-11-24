@@ -32,6 +32,7 @@ struct apple_rtkit {
 	struct completion epmap_completion;
 	struct completion iop_pwr_ack_completion;
 	struct completion ap_pwr_ack_completion;
+	struct completion crashlog_completion;
 
 	int boot_result;
 	int version;

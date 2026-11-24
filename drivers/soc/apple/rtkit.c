@@ -152,6 +152,11 @@ abort_boot:
 	complete_all(&rtk->epmap_completion);
 }
 
+static bool apple_rtkit_quirk(struct apple_rtkit *rtk, u32 quirk)
+{
+	return rtk->ops->quirks & quirk;
+}
+
 static void apple_rtkit_management_rx_epmap(struct apple_rtkit *rtk, u64 msg)
 {
 	int i, ep;
@@ -167,6 +172,9 @@ static void apple_rtkit_management_rx_epmap(struct apple_rtkit *rtk, u64 msg)
 		ep = 32 * base + i;
 		dev_dbg(rtk->dev, "RTKit: Discovered endpoint 0x%02x\n", ep);
 		set_bit(ep, rtk->endpoints);
+		if (ep == APPLE_RTKIT_EP_CRASHLOG &&
+		    apple_rtkit_quirk(rtk, APPLE_RTKIT_QUIRK_EARLY_CRASHLOG))
+			apple_rtkit_start_ep(rtk, ep);
 	}
 
 	reply = FIELD_PREP(APPLE_RTKIT_MGMT_EPMAP_BASE, base);
@@ -181,6 +189,9 @@ static void apple_rtkit_management_rx_epmap(struct apple_rtkit *rtk, u64 msg)
 		return;
 
 	for_each_set_bit(ep, rtk->endpoints, APPLE_RTKIT_APP_ENDPOINT_START) {
+		if (ep == APPLE_RTKIT_EP_CRASHLOG &&
+		    apple_rtkit_quirk(rtk, APPLE_RTKIT_QUIRK_EARLY_CRASHLOG))
+			continue;
 		switch (ep) {
 		/* the management endpoint is started by default */
 		case APPLE_RTKIT_EP_MGMT:
@@ -315,6 +326,9 @@ static int apple_rtkit_common_rx_get_buffer(struct apple_rtkit *rtk,
 					    buffer->iova);
 		}
 		apple_rtkit_send_message(rtk, ep, reply, NULL, false);
+	} else if (ep == APPLE_RTKIT_EP_CRASHLOG &&
+		   apple_rtkit_quirk(rtk, APPLE_RTKIT_QUIRK_EARLY_CRASHLOG)) {
+		apple_rtkit_send_message(rtk, ep, msg, NULL, false);
 	}
 
 	return 0;
@@ -371,8 +385,9 @@ static void apple_rtkit_crashlog_rx(struct apple_rtkit *rtk, u64 msg)
 	}
 
 	if (!rtk->crashlog_buffer.size) {
-		apple_rtkit_common_rx_get_buffer(rtk, &rtk->crashlog_buffer,
-						 APPLE_RTKIT_EP_CRASHLOG, msg);
+		if (!apple_rtkit_common_rx_get_buffer(rtk, &rtk->crashlog_buffer,
+						      APPLE_RTKIT_EP_CRASHLOG, msg))
+			complete_all(&rtk->crashlog_completion);
 		return;
 	}
 
@@ -689,6 +704,7 @@ struct apple_rtkit *apple_rtkit_init(struct device *dev, void *cookie,
 	init_completion(&rtk->epmap_completion);
 	init_completion(&rtk->iop_pwr_ack_completion);
 	init_completion(&rtk->ap_pwr_ack_completion);
+	init_completion(&rtk->crashlog_completion);
 
 	bitmap_zero(rtk->endpoints, APPLE_RTKIT_MAX_ENDPOINTS);
 	set_bit(APPLE_RTKIT_EP_MGMT, rtk->endpoints);
@@ -764,6 +780,7 @@ int apple_rtkit_reinit(struct apple_rtkit *rtk)
 	reinit_completion(&rtk->epmap_completion);
 	reinit_completion(&rtk->iop_pwr_ack_completion);
 	reinit_completion(&rtk->ap_pwr_ack_completion);
+	reinit_completion(&rtk->crashlog_completion);
 
 	rtk->crashed = false;
 	rtk->iop_power_state = APPLE_RTKIT_PWR_STATE_OFF;
@@ -839,6 +856,13 @@ int apple_rtkit_boot(struct apple_rtkit *rtk)
 	ret = apple_rtkit_wait_for_completion(&rtk->iop_pwr_ack_completion);
 	if (ret)
 		return ret;
+
+	if (apple_rtkit_quirk(rtk, APPLE_RTKIT_QUIRK_EARLY_CRASHLOG)) {
+		dev_dbg(rtk->dev, "RTKit: waiting for the crash buffer\n");
+		ret = apple_rtkit_wait_for_completion(&rtk->crashlog_completion);
+		if (ret)
+			return ret;
+	}
 
 	return apple_rtkit_set_ap_power_state(rtk, APPLE_RTKIT_PWR_STATE_ON);
 }

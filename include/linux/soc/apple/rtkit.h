@@ -10,6 +10,7 @@
 #ifndef _LINUX_APPLE_RTKIT_H_
 #define _LINUX_APPLE_RTKIT_H_
 
+#include <linux/bits.h>
 #include <linux/device.h>
 #include <linux/types.h>
 #include <linux/mailbox_client.h>
@@ -55,7 +56,12 @@ struct apple_rtkit_shmem {
  *                 specified dma_free_coherent is used. Called in process
  *                 context.
  */
+enum apple_rtkit_quirk {
+	APPLE_RTKIT_QUIRK_EARLY_CRASHLOG = BIT(0),
+};
+
 struct apple_rtkit_ops {
+	u32 quirks;
 	void (*crashed)(void *cookie, const void *crashlog, size_t crashlog_size);
 	void (*recv_message)(void *cookie, u8 endpoint, u64 message);
 	bool (*recv_message_early)(void *cookie, u8 endpoint, u64 message);
